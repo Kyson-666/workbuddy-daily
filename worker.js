@@ -1,5 +1,5 @@
 /**
- * WorkBuddy 每日签到 —— Cloudflare Worker（单文件版）
+ * WorkBuddy 每日签到 —— Cloudflare Worker
  *
  * 整个项目就这一个文件，没有构建步骤、没有 npm 依赖、没有 import。
  * 复制粘贴到 Cloudflare 控制台的在线编辑器也能直接跑。
@@ -17,7 +17,7 @@
  *   Secret      ADMIN_TOKEN     页面登录密码，随便一串长随机
  *   Secret      CRON_SECRET     （可选）给 /cron 用的独立口令，缺省回落到 ADMIN_TOKEN
  *
- * 部署方式：Cloudflare 控制台 → Workers & Pages → 新建 → 粘贴本文件全文 → 绑定下面这些 KV / Secrets
+ * 部署：Cloudflare 控制台 → Workers → 新建 → 粘贴本文件全文 → 绑定 KV 与 Secrets
  *
  * 添加账号只有一种方式：页面上内嵌官方登录页，微信扫码后自动存账号。
  */
@@ -756,20 +756,34 @@ const state = { tok: '' };
 
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
-function tagOf(a){
-  const s = a.lastState;
-  if(s==='checked') return '<span class="tag t-ok">已签</span>';
-  if(s==='already'||s==='skipped') return '<span class="tag t-idle">今日已签</span>';
-  if(s==='token_dead') return '<span class="tag t-bad">令牌失效</span>';
-  if(s==='error') return '<span class="tag t-bad">失败</span>';
-  return '<span class="tag t-warn">未运行</span>';
+/** 按北京时间取当天日期串 YYYY-MM-DD（与 Worker 端的 lastOkDate 口径一致） */
+function bjToday(){
+  return new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
 }
 
-/** 状态已由标签表达，就不再重复显示小字；只有真正补充信息（积分、失败原因）才显示 */
+/**
+ * 状态一律现算，不再信任 lastState 这个历史快照。
+ * lastState 只是「上一次运行的结果」，跨天不会自己失效，所以不能直接拿来渲染。
+ * 判断依据只剩两个当天事实：
+ *   lastOkDate 是否等于今天、lastRun 是否落在今天（lastRun 已是 +08:00 格式串，取前 10 位即可）。
+ */
+function tagOf(a){
+  const today = bjToday();
+  const ranToday = !!a.lastRun && a.lastRun.slice(0, 10) === today;
+  if (a.lastOkDate === today) return '<span class="tag t-ok">已签</span>';
+  if (a.lastState === 'token_dead') return '<span class="tag t-bad">令牌失效</span>';
+  if (a.lastState === 'error' && ranToday) return '<span class="tag t-bad">签到失败</span>';
+  return '<span class="tag t-idle">今日未签</span>';
+}
+
+/** 同上：只有属于今天的、仍有信息量的小字才显示，避免昨天的文案挂到今天头上 */
 function msgOf(a){
-  const s = a.lastState;
-  if(!s || s==='already' || s==='skipped' || s==='new') return '';
-  return a.lastMsg || '';
+  const today = bjToday();
+  const ranToday = !!a.lastRun && a.lastRun.slice(0, 10) === today;
+  if (a.lastOkDate === today) return a.lastState === 'checked' ? (a.lastMsg || '') : '';
+  if (a.lastState === 'token_dead') return a.lastMsg || '';
+  if (a.lastState === 'error' && ranToday) return a.lastMsg || '';
+  return '';
 }
 
 async function api(path, opts={}){
@@ -939,6 +953,16 @@ $('#qrbtn').onclick = async ()=>{
     btn.disabled = false;
   }
 };
+
+/** 页面挂着过夜时自动翻篇：只在日期真的变了才重新拉一次列表 */
+let dayMark = bjToday();
+setInterval(()=>{
+  const d = bjToday();
+  if(d !== dayMark){
+    dayMark = d;
+    if(state.tok) load();
+  }
+}, 60000);
 
 // 本机登录过就直接进控制台，省掉每次都要输密码
 const saved = localStorage.getItem(PWD_KEY);
