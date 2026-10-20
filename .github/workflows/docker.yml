@@ -26,12 +26,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # 想同时推 Docker Hub：在仓库 Secrets 里加 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，
-      # 然后在下面 images 里追加 kyson666/workbuddy-trae-checkin，并复用同一个 login-action 步骤。
+      # 然后在下面 images 里追加 kyson666/workbuddy-daily，并复用同一个 login-action 步骤。
       - name: 生成标签
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/workbuddy-trae-checkin
+          images: ghcr.io/${{ github.repository_owner }}/workbuddy-daily
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag

@@ -1,3 +1,3 @@
-module github.com/hanyuestar/workbuddy-trae-checkin
+module github.com/hanyuestar/workbuddy-daily
 
 go 1.24

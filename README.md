@@ -29,8 +29,8 @@
 ## 二、快速开始
 
 ```bash
-git clone https://github.com/hanyuestar/workbuddy-trae-checkin.git
-cd workbuddy-trae-checkin
+git clone https://github.com/hanyuestar/workbuddy-daily.git
+cd workbuddy-daily
 cp .env.example .env        # 可全部留空
 docker compose up -d --build
 ```
@@ -53,7 +53,7 @@ docker run -d --name checkin --restart unless-stopped \
   -p 17388:17388 \
   -v "$PWD/data:/data" \
   -e TZ=Asia/Shanghai \
-  ghcr.io/hanyuestar/workbuddy-trae-checkin:latest
+  ghcr.io/hanyuestar/workbuddy-daily:latest
 ```
 
 ---
@@ -150,7 +150,7 @@ data/
 
 ```bash
 # 本机架构
-docker build -t workbuddy-trae-checkin:latest .
+docker build -t workbuddy-daily:latest .
 
 # 多架构（需要 buildx）
 docker buildx build --platform linux/amd64,linux/arm64 -t <tag> --push .
