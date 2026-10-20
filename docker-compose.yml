@@ -1,0 +1,20 @@
+services:
+  checkin:
+    image: ghcr.io/hanyuestar/workbuddy-trae-checkin:latest
+    build: .
+    container_name: checkin
+    restart: unless-stopped
+    ports:
+      # 17388 不是随便挑的：Trae 的授权回调固定回送到 http://127.0.0.1:17388/authorize
+      - "17388:17388"
+    environment:
+      TZ: Asia/Shanghai
+      # 留空则首次启动自动生成，写入 data/admin_token 并在日志里打印一次
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # 留空则首次启动自动生成到 data/master.key（丢了只能重新扫码）
+      MASTER_KEY: ${MASTER_KEY:-}
+      # 北京时间，逗号分隔；留空即关闭自动签到
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-08:10,00:20}
+      CRON_SECRET: ${CRON_SECRET:-}
+    volumes:
+      - ./data:/data

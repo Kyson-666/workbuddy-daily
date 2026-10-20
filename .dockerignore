@@ -1,0 +1,11 @@
+.git
+.github
+data
+.tmpdata
+*.exe
+*.log
+.env
+upstream
+testdata
+*.md
+!README.md

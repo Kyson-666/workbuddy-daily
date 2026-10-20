@@ -1,0 +1,13 @@
+# 构建产物
+checkin
+checkin.exe
+
+# 运行时数据（含加密后的账号令牌与主密钥，绝对不能提交）
+data/
+.tmpdata/
+.env
+
+# 编辑器和系统
+.DS_Store
+Thumbs.db
+*.log

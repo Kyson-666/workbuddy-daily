@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>签到控制台 · Trae + WorkBuddy</title>
+<style>
+  :root{
+    --bg:#eef1f5;--glow-a:rgba(16,160,110,.11);--glow-b:rgba(56,110,220,.09);--grid:rgba(15,23,42,.035);
+    --surface:#fff;--surface-2:#f6f8fa;--line:rgba(15,23,42,.09);--line-2:rgba(15,23,42,.16);
+    --txt:#0c141d;--dim:#5e6a78;--pri:#0d8a61;--pri-ink:#fff;--ring:rgba(13,138,97,.16);
+    --ok:#0d8a61;--ok-bg:rgba(13,138,97,.10);--warn:#9a6407;--warn-bg:rgba(190,124,15,.13);
+    --bad:#bf3529;--bad-bg:rgba(191,53,41,.10);--idle:#5e6a78;--idle-bg:rgba(15,23,42,.055);
+    --bar:rgba(238,241,245,.78);--sh-1:0 1px 2px rgba(15,23,42,.04),0 10px 26px -16px rgba(15,23,42,.22);
+    --sh-2:0 18px 44px -22px rgba(15,23,42,.35);--r:16px;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#070a0e;--glow-a:rgba(45,208,126,.16);--glow-b:rgba(70,110,255,.13);--grid:rgba(255,255,255,.035);
+      --surface:#101822;--surface-2:#0c131b;--line:rgba(255,255,255,.075);--line-2:rgba(255,255,255,.14);
+      --txt:#e8eef5;--dim:#8b98a7;--pri:#2fd07e;--pri-ink:#04150d;--ring:rgba(47,208,126,.20);
+      --ok:#3ddc97;--ok-bg:rgba(61,220,151,.13);--warn:#e6ae4a;--warn-bg:rgba(230,174,74,.13);
+      --bad:#ff7d6e;--bad-bg:rgba(255,125,110,.13);--idle:#8b98a7;--idle-bg:rgba(255,255,255,.06);
+      --bar:rgba(7,10,14,.72);--sh-1:0 1px 0 rgba(255,255,255,.03),0 14px 34px -22px rgba(0,0,0,.95);
+      --sh-2:0 26px 60px -30px rgba(0,0,0,1);
+    }
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  body{margin:0;background:var(--bg);color:var(--txt);-webkit-font-smoothing:antialiased;
+       font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(58% 46% at 8% -6%,var(--glow-a),transparent 62%),
+               radial-gradient(46% 42% at 96% 2%,var(--glow-b),transparent 62%)}
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-image:
+      linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:46px 46px;
+    -webkit-mask-image:radial-gradient(72% 58% at 50% 0%,#000,transparent 78%);
+            mask-image:radial-gradient(72% 58% at 50% 0%,#000,transparent 78%)}
+  .wrap{position:relative;z-index:1;max-width:1920px;margin:0 auto;
+        padding:clamp(16px,2.6vw,36px) clamp(16px,3vw,44px) 68px}
+
+  .brand{display:flex;align-items:center;gap:13px}
+  .mark{width:44px;height:44px;flex:0 0 auto;border-radius:14px;display:grid;place-items:center;
+        background:linear-gradient(155deg,var(--pri),#0a6a4a);
+        box-shadow:var(--sh-2),inset 0 1px 0 rgba(255,255,255,.3)}
+  .mark svg{width:21px;height:21px;fill:none;stroke:#fff;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+  .eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+  h1{font-size:clamp(19px,2.6vw,23px);margin:1px 0 0;font-weight:700;letter-spacing:-.02em;line-height:1.25}
+
+  #loginView{min-height:min(74dvh,640px);display:grid;place-content:center;gap:26px}
+  .login-card{width:min(470px,92vw);padding:26px;background:var(--surface);border:1px solid var(--line);
+              border-radius:var(--r);box-shadow:var(--sh-1)}
+  .lbl{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+       text-transform:uppercase;color:var(--dim);margin-bottom:9px}
+  .field{display:flex;gap:10px}
+  .field input{flex:1;min-width:0}
+
+  input{font:inherit;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;
+        background:var(--surface);color:var(--txt);outline:none;transition:border-color .18s,box-shadow .18s;width:100%}
+  input::placeholder{color:var(--dim)}
+  input:focus{border-color:var(--pri);box-shadow:0 0 0 4px var(--ring)}
+  button{font:inherit;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+         padding:11px 18px;border-radius:12px;border:1px solid var(--line-2);background:var(--surface);color:var(--txt);
+         cursor:pointer;transition:transform .12s ease,box-shadow .18s ease,border-color .18s ease,filter .18s ease}
+  button:hover{border-color:var(--txt);transform:translateY(-1px);box-shadow:var(--sh-1)}
+  button:active{transform:none}
+  button:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+  button.pri{background:var(--pri);border-color:transparent;color:var(--pri-ink);
+             box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 12px 26px -14px var(--pri)}
+  button.pri:hover{border-color:transparent;filter:brightness(1.06)}
+  button:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+  .topbar{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;
+          gap:14px;flex-wrap:wrap;padding:12px 0 14px;margin-bottom:14px;background:var(--bar);
+          backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+  .chip{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);
+        background:var(--surface);font-size:12.5px;color:var(--dim);white-space:nowrap;box-shadow:var(--sh-1)}
+  .chip b{color:var(--txt);font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px}
+  .chip .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--ok-bg)}
+
+  .tabs{display:flex;gap:4px;margin-bottom:18px;padding:4px;border:1px solid var(--line);border-radius:14px;
+        background:var(--surface-2);width:fit-content;max-width:100%;overflow:auto}
+  .tab{display:inline-flex;align-items:center;gap:9px;padding:10px 20px;border:0;border-radius:10px;background:transparent;
+       color:var(--dim);font-size:14px;font-weight:600;white-space:nowrap;box-shadow:none}
+  .tab:hover{color:var(--txt);background:var(--ok-bg);transform:none;box-shadow:none}
+  .tab.on{background:var(--pri);color:var(--pri-ink);font-weight:700;box-shadow:0 6px 16px var(--ring)}
+  .tab.on:hover{background:var(--pri);color:var(--pri-ink)}
+  .tab b{font-family:var(--mono);font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;
+         background:var(--idle-bg);color:var(--dim);font-variant-numeric:tabular-nums;transition:background .18s,color .18s}
+  .tab.on b{background:rgba(0,0,0,.16);color:var(--pri-ink)}
+
+  .grid{display:grid;gap:18px;grid-template-columns:minmax(0,1fr) clamp(400px,32vw,560px);align-items:start}
+  .col{display:grid;gap:18px;min-width:0}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--sh-1)}
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .card-head h2{margin:0;font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;
+                text-transform:uppercase;color:var(--dim);font-weight:600}
+  .card-head .meta{font-family:var(--mono);font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  .actions .err{flex:1 1 100%;margin-top:2px}
+
+  .list table{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px}
+  .list th{text-align:left;padding:0 10px 9px;border-bottom:1px solid var(--line);color:var(--dim);
+           font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+           font-weight:600;white-space:nowrap}
+  .list td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .list tbody tr{transition:background .16s ease}
+  .list tbody tr:hover{background:var(--surface-2)}
+  .list tbody tr:last-child td{border-bottom:0}
+  .list td:first-child{font-weight:600}
+  /* 备注：名字 + 一支常驻的铅笔，点哪个都能就地改名 */
+  .list .lab-wrap{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%}
+  .list .lab{cursor:pointer;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+             border-bottom:1px dashed transparent;transition:border-color .15s}
+  .list .lab:hover{border-bottom-color:var(--dim)}
+  .list .pen{width:26px;height:26px;padding:0;flex:0 0 auto;display:inline-grid;place-items:center;
+             border:1px solid var(--line-2);border-radius:9px;background:var(--surface-2);
+             color:var(--dim);cursor:pointer;box-shadow:none;
+             transition:color .15s,border-color .15s,background .15s}
+  .list .pen svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;
+                 stroke-linecap:round;stroke-linejoin:round}
+  .list .pen:hover,.list .pen:focus-visible{color:var(--pri);border-color:var(--pri);background:var(--surface)}
+  .list .lab-edit{font:inherit;font-weight:600;font-size:13.5px;padding:5px 9px;width:auto;min-width:130px;
+                  max-width:210px;border:1px solid var(--pri);border-radius:9px;background:var(--surface);
+                  color:var(--txt);box-shadow:0 0 0 3px var(--ring);outline:none}
+  .list .thint{color:var(--dim);font-size:11.5px;margin:9px 2px 0;opacity:.85}
+  .list .num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:13px}
+  .list .time{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+  .list table button{padding:6px 12px;border-radius:10px;font-size:12.5px;box-shadow:none}
+  .list table button:hover{color:var(--bad);border-color:var(--bad);background:var(--bad-bg)}
+
+  .tag{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+       font-size:12px;font-weight:600;white-space:nowrap}
+  .tag::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto}
+  .t-ok{background:var(--ok-bg);color:var(--ok)}
+  .t-warn{background:var(--warn-bg);color:var(--warn)}
+  .t-bad{background:var(--bad-bg);color:var(--bad)}
+  .t-idle{background:var(--idle-bg);color:var(--idle)}
+  .hint{color:var(--dim);font-size:12.5px;margin-top:9px}
+  code{font-family:var(--mono);font-size:11.5px;background:var(--idle-bg);color:var(--txt);padding:2px 6px;border-radius:6px}
+  .empty{color:var(--dim);text-align:center;padding:26px 16px;font-size:13px}
+  .err{color:var(--bad);font-size:13px;margin-top:10px;white-space:pre-wrap}
+
+  @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  .card,.login-card,.topbar,.tabs{animation:rise .55s cubic-bezier(.22,.9,.28,1) both}
+  .col>.card:nth-child(2){animation-delay:.06s}
+  .col:nth-child(2)>.card{animation-delay:.12s}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+  @media (max-width:1080px){
+    .grid{grid-template-columns:minmax(0,1fr)}
+    .topbar{position:static}
+  }
+  @media (max-width:640px){
+    #loginView{min-height:auto;padding:36px 0}
+    .list table,.list tbody,.list tr,.list td{display:block}
+    .list thead{display:none}
+    .list tbody{display:grid;gap:10px}
+    .list tr{padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2)}
+    .list td{display:flex;align-items:center;justify-content:space-between;gap:14px;
+             padding:5px 0;border:0;text-align:right}
+    .list td::before{content:attr(data-label);flex:0 0 auto;text-align:left;font-family:var(--mono);
+             font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+    .list td:first-child{font-size:15px;padding-bottom:9px;margin-bottom:5px;border-bottom:1px solid var(--line)}
+    .list td:first-child::before{display:none}
+    .list td.st{flex-wrap:wrap;justify-content:flex-end}
+    .list td.st>div{flex:1 1 100%;text-align:right;margin-top:4px}
+    .list td:last-child{padding-top:9px}
+    .tab{padding:8px 13px;font-size:13px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="loginView">
+    <div class="brand">
+      <span class="mark"><svg viewBox="0 0 24 24"><path d="M4.5 12.6l4.6 4.6L19.5 6.8"/></svg></span>
+      <div>
+        <div class="eyebrow">Daily Check-in</div>
+        <h1>签到控制台</h1>
+      </div>
+    </div>
+
+    <div class="login-card">
+      <label class="lbl" for="pwd">登录密码</label>
+      <div class="field">
+        <input id="pwd" type="password" placeholder="输入登录密码" autocomplete="current-password">
+        <button id="loginbtn" class="pri">登录</button>
+      </div>
+      <div class="hint">密码即后台的 <code>ADMIN_TOKEN</code>。登录状态存在本机浏览器，公共电脑用完请点「退出登录」。</div>
+      <div class="err" id="loginErr"></div>
+    </div>
+  </div>
+
+  <div id="mainView" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="mark"><svg viewBox="0 0 24 24"><path d="M4.5 12.6l4.6 4.6L19.5 6.8"/></svg></span>
+        <div>
+          <div class="eyebrow">Daily Check-in</div>
+          <h1>签到控制台</h1>
+        </div>
+      </div>
+      <div class="row">
+        <span class="chip"><i class="dot"></i>今日已签 <b id="statAll">—</b></span>
+        <button id="runAll" class="pri">全部签到</button>
+        <button id="logout">退出登录</button>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab on" data-tab="trae">Trae <b id="cntTrae">0</b></button>
+      <button class="tab" data-tab="wb">WorkBuddy <b id="cntWb">0</b></button>
+    </nav>
+
+    <section class="panel" id="panel-trae">
+      <div class="grid">
+        <div class="col">
+          <div class="card actions">
+            <button class="pri" data-run="trae">立即签到</button>
+            <button data-refresh="trae">刷新</button>
+            <div class="err" id="err-trae"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Trae 账号</h2><span class="meta" id="lastRun-trae">—</span></div>
+            <div class="list" id="list-trae"><div class="empty">加载中…</div></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card">
+            <div class="card-head"><h2>扫码登录 · Trae</h2><span class="meta" id="traeMode">自动回调</span></div>
+            <div class="row">
+              <button class="pri" id="traeQr">添加账号</button>
+            </div>
+            <div class="hint" id="traeQrStatus">点「添加账号」打开官方登录页，用抖音扫码。扫码完成后本服务会自己接住回调，账号自动出现在左侧列表里，不需要复制任何链接。</div>
+            <details id="traeQrFallback" style="margin-top:10px">
+              <summary style="cursor:pointer;color:var(--dim);font-size:12.5px">自动回调没接住？手动粘贴一次</summary>
+              <input id="traeQrUrl" placeholder="粘贴登录后地址栏的整段链接（127.0.0.1:17388/authorize?…）" style="margin-top:8px">
+              <div class="row" style="margin-top:8px">
+                <button id="traeQrClaim">绑定账号</button>
+              </div>
+              <div class="err" id="traeQrErr"></div>
+            </details>
+            <div class="hint">扫码走官网抖音授权，设备密钥由本服务现场生成并加密保存。容器在 <code>127.0.0.1:17388</code> 上监听回调，所以本机打开控制台时全程不用人工介入。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-wb" hidden>
+      <div class="grid">
+        <div class="col">
+          <div class="card actions">
+            <button class="pri" data-run="wb">立即签到</button>
+            <button data-refresh="wb">刷新</button>
+            <div class="err" id="err-wb"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>WorkBuddy 账号</h2><span class="meta" id="lastRun-wb">—</span></div>
+            <div class="list" id="list-wb"><div class="empty">加载中…</div></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card">
+            <div class="card-head"><h2>扫码登录 · WorkBuddy</h2></div>
+            <div class="row">
+              <button class="pri" id="wbQr">添加账号</button>
+            </div>
+            <div class="hint" id="wbQrStatus">点按钮在新窗口打开官方登录页，用微信扫码并确认，账号会自动保存。</div>
+            <div class="hint">二维码由官方登录页渲染，本服务不接触你的微信信息。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+</div>
+<script>
+var $ = function(s){ return document.querySelector(s); };
+var PWD_KEY = 'signin-admin-pwd';
+var state = { tok:'', tab:'trae', data:{ trae:null, wb:null } };
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+}); }
+function fmt(n){ return n==null||n==='' ? '—' : String(n); }
+
+/* 状态由服务端按当天判定（signedToday / ranToday），前端不自行推测 */
+function bjToday(){
+  return new Date(Date.now() + 8*3600e3).toISOString().slice(0,10);
+}
+
+function tagTrae(a, now){
+  if(a.signedToday) return '<span class="tag t-ok">已签</span>';
+  if(a.cooldownUntil && a.cooldownUntil > now){
+    return '<span class="tag t-warn">限流 ' + Math.ceil((a.cooldownUntil-now)/60000) + ' 分钟</span>';
+  }
+  if(a.lastState==='token_dead') return '<span class="tag t-bad">令牌失效</span>';
+  if(a.lastState==='pending' && a.ranToday) return '<span class="tag t-warn">待确认</span>';
+  if(a.lastState==='error' && a.ranToday) return '<span class="tag t-bad">签到失败</span>';
+  if(!a.hasKeys) return '<span class="tag t-warn">缺设备密钥</span>';
+  return '<span class="tag t-idle">今日未签</span>';
+}
+function msgTrae(a){
+  if(a.signedToday) return a.lastState==='checked' ? (a.lastMsg||'') : '';
+  if(a.lastState==='token_dead') return a.lastMsg || '';
+  if(a.lastState==='pending' && a.ranToday) return a.lastMsg || '';
+  if(a.lastState==='error' && a.ranToday) return a.lastMsg || '';
+  return '';
+}
+
+function tagWb(a){
+  if(a.signedToday) return '<span class="tag t-ok">已签</span>';
+  if(a.lastState==='token_dead') return '<span class="tag t-bad">令牌失效</span>';
+  if(a.lastState==='error' && a.ranToday) return '<span class="tag t-bad">签到失败</span>';
+  return '<span class="tag t-idle">今日未签</span>';
+}
+function msgWb(a){
+  if(a.signedToday) return a.lastState==='checked' ? (a.lastMsg||'') : '';
+  if(a.lastState==='token_dead') return a.lastMsg || '';
+  if(a.lastState==='error' && a.ranToday) return a.lastMsg || '';
+  return '';
+}
+
+function api(path, opts){
+  opts = opts || {};
+  return fetch(path, {
+    method: opts.method || 'GET',
+    body: opts.body,
+    headers: { 'Content-Type':'application/json', 'X-Admin-Token': state.tok }
+  }).then(function(res){
+    return res.json().catch(function(){ return { error:'响应无法解析' }; }).then(function(data){
+      if(res.status === 401){
+        var msg = data.error || '登录已失效，请重新登录';
+        logout(msg);
+        throw new Error(msg);
+      }
+      if(!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      return data;
+    });
+  });
+}
+
+function setLoginErr(m){ $('#loginErr').textContent = m ? String(m) : ''; }
+function showErr(p, e){ $('#err-' + p).textContent = e ? String(e.message || e) : ''; }
+
+/* ---------------- 登录 / 登出 ---------------- */
+
+function login(password){
+  var v = String(password==null?'':password).trim();
+  if(!v){ setLoginErr('请输入登录密码'); return; }
+  var btn = $('#loginbtn');
+  btn.disabled = true; btn.textContent = '登录中…';
+  return fetch('/api/ping', { headers: { 'X-Admin-Token': v } })
+    .then(function(res){
+      return res.json().catch(function(){ return { error:'响应无法解析' }; }).then(function(d){
+        if(!res.ok) throw new Error(d.error || ('HTTP ' + res.status));
+        state.tok = v;
+        localStorage.setItem(PWD_KEY, v);
+        setLoginErr('');
+        $('#loginView').hidden = true;
+        $('#mainView').hidden = false;
+        loadAll();
+      });
+    })
+    .catch(function(e){ setLoginErr(e.message || e); })
+    .then(function(){ btn.disabled = false; btn.textContent = '登录'; });
+}
+
+function logout(msg){
+  stopWbQr();
+  stopTraePoll();
+  state.tok = '';
+  state.data = { trae:null, wb:null };
+  localStorage.removeItem(PWD_KEY);
+  $('#pwd').value = '';
+  $('#list-trae').innerHTML = '<div class="empty">加载中…</div>';
+  $('#list-wb').innerHTML = '<div class="empty">加载中…</div>';
+  $('#statAll').textContent = '—';
+  showErr('trae',''); showErr('wb','');
+  setLoginErr(msg || '');
+  $('#mainView').hidden = true;
+  $('#loginView').hidden = false;
+}
+
+/* ---------------- 列表渲染 ---------------- */
+
+function lastRunOf(list){
+  var times = list.map(function(a){ return a.lastRun; }).filter(Boolean).sort();
+  return times.length ? times[times.length-1].replace('T',' ').slice(0,16) : (list.length ? '暂无记录' : '暂无账号');
+}
+
+function renderTrae(d){
+  var box = $('#list-trae'), now = Date.now();
+  state.data.trae = d;
+  $('#lastRun-trae').textContent = lastRunOf(d.accounts);
+  $('#cntTrae').textContent = d.accounts.filter(function(a){ return a.signedToday; }).length + '/' + d.accounts.length;
+  if(!d.accounts.length){ box.innerHTML = '<div class="empty">还没有账号，右侧扫码添加</div>'; return; }
+  box.innerHTML = '<table><thead><tr><th>备注</th><th>状态</th><th>本次</th><th>余额</th><th>上次运行</th><th></th></tr></thead><tbody>'
+    + d.accounts.map(function(a){
+        var m = msgTrae(a);
+        var gain = (a.lastState==='checked' && a.lastCredit!=null) ? '+' + a.lastCredit : '—';
+        return '<tr>'
+          + '<td class="labcell" data-label="备注">' + labCellHtml('trae', a.id, a.label) + '</td>'
+          + '<td class="st" data-label="状态">' + tagTrae(a, now)
+            + (m ? '<div class="hint" style="margin:2px 0 0">' + esc(m) + '</div>' : '') + '</td>'
+          + '<td class="num" data-label="本次">' + gain + '</td>'
+          + '<td class="num" data-label="余额">' + fmt(a.credits) + '</td>'
+          + '<td class="time" data-label="上次运行">' + (a.lastRun ? esc(a.lastRun.replace('T',' ').slice(0,16)) : '—') + '</td>'
+          + '<td data-label="操作"><button data-del="trae|' + esc(a.id) + '">删除</button></td>'
+          + '</tr>';
+      }).join('') + '</tbody></table>'
+    + '<div class="thint">点账号名或右边的铅笔，可以改备注</div>';
+  bindDel();
+}
+
+function renderWb(d){
+  var box = $('#list-wb');
+  var today = bjToday();
+  // WorkBuddy 的列表接口只返回 lastOkDate / lastRun，这里按当天现算今日状态
+  d.accounts.forEach(function(a){
+    a.signedToday = a.lastOkDate === today;
+    a.ranToday = !!a.lastRun && a.lastRun.slice(0,10) === today;
+  });
+  state.data.wb = d;
+  $('#lastRun-wb').textContent = lastRunOf(d.accounts);
+  $('#cntWb').textContent = d.accounts.filter(function(a){ return a.signedToday; }).length + '/' + d.accounts.length;
+  if(!d.accounts.length){ box.innerHTML = '<div class="empty">还没有账号，右侧扫码添加</div>'; return; }
+  box.innerHTML = '<table><thead><tr><th>备注</th><th>状态</th><th>连签</th><th>本期</th><th>上次运行</th><th></th></tr></thead><tbody>'
+    + d.accounts.map(function(a){
+        var m = msgWb(a);
+        return '<tr>'
+          + '<td class="labcell" data-label="备注">' + labCellHtml('wb', a.id, a.label) + '</td>'
+          + '<td class="st" data-label="状态">' + tagWb(a)
+            + (m ? '<div class="hint" style="margin:2px 0 0">' + esc(m) + '</div>' : '') + '</td>'
+          + '<td class="num" data-label="连签">' + (a.streak==null ? '—' : a.streak + ' 天') + '</td>'
+          + '<td class="num" data-label="本期">' + fmt(a.total) + '</td>'
+          + '<td class="time" data-label="上次运行">' + (a.lastRun ? esc(a.lastRun.replace('T',' ').slice(0,16)) : '—') + '</td>'
+          + '<td data-label="操作"><button data-del="wb|' + esc(a.id) + '">删除</button></td>'
+          + '</tr>';
+      }).join('') + '</tbody></table>'
+    + '<div class="thint">点账号名或右边的铅笔，可以改备注</div>';
+  bindDel();
+}
+
+/* 备注单元格：名字 + 常驻铅笔，点哪个都能就地改名 */
+function labCellHtml(p, id, label){
+  var k = 'data-rename="' + p + '|' + esc(id) + '" data-name="' + esc(label) + '"';
+  return '<span class="lab-wrap">'
+    + '<span class="lab" ' + k + ' title="点击修改备注">' + esc(label) + '</span>'
+    + '<button class="pen" type="button" ' + k + ' title="修改备注" aria-label="修改备注">'
+    + '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h3.6L19 8.6a2.2 2.2 0 0 0-3.1-3.1L4.5 16.9V20z"/></svg>'
+    + '</button></span>';
+}
+
+/* 就地改名：把单元格换成输入框，回车/失焦保存，Esc 放弃 */
+function startRename(el){
+  var td = el.closest('td');
+  if(!td || td.querySelector('.lab-edit')) return;
+  var parts = el.dataset.rename.split('|');
+  var p = parts[0], id = parts[1], old = el.dataset.name || '';
+  td.innerHTML = '<input class="lab-edit" maxlength="40" aria-label="备注" ' +
+                 'title="回车保存，Esc 取消" value="' + esc(old) + '">';
+  var input = td.querySelector('.lab-edit');
+  input.focus();
+  input.select();
+
+  var done = false;
+  function restore(){ td.innerHTML = labCellHtml(p, id, old); bindDel(); }
+  function finish(save){
+    if(done) return;
+    done = true;
+    var v = input.value.trim();
+    if(!save || !v || v === old){ restore(); return; }
+    input.disabled = true;
+    var url = p === 'trae' ? '/trae/api/rename' : '/wb/api/rename';
+    api(url, { method:'POST', body: JSON.stringify({ id:id, label:v }) })
+      .then(function(){ return load(p); })
+      .catch(function(e){ showErr(p, e); restore(); });
+  }
+  input.addEventListener('keydown', function(ev){
+    if(ev.key === 'Enter'){ ev.preventDefault(); finish(true); }
+    else if(ev.key === 'Escape'){ ev.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', function(){ finish(true); });
+}
+
+function bindDel(){
+  document.querySelectorAll('[data-del]').forEach(function(b){
+    b.onclick = function(){
+      var parts = b.dataset.del.split('|');
+      var p = parts[0], id = parts[1];
+      if(!confirm('删除这个账号？')) return;
+      var url = p === 'trae' ? '/trae/api/accounts/remove' : '/wb/api/remove';
+      api(url, { method:'POST', body: JSON.stringify({ id:id }) })
+        .then(function(){ return load(p); })
+        .catch(function(e){ showErr(p, e); });
+    };
+  });
+
+  document.querySelectorAll('[data-rename]').forEach(function(el){
+    el.onclick = function(ev){ ev.stopPropagation(); startRename(el); };
+  });
+}
+
+function renderStat(){
+  var t = state.data.trae ? state.data.trae.accounts : null;
+  var w = state.data.wb ? state.data.wb.accounts : null;
+  if(t === null && w === null){ $('#statAll').textContent = '—'; return; }
+  var all = (t || []).concat(w || []);
+  var signed = all.filter(function(a){ return a.signedToday; }).length;
+  $('#statAll').textContent = signed + ' / ' + all.length;
+}
+
+/* ---------------- 加载与签到 ---------------- */
+
+function load(p){
+  var url = p === 'trae' ? '/trae/api/list' : '/wb/api/list';
+  return api(url)
+    .then(function(d){ p === 'trae' ? renderTrae(d) : renderWb(d); renderStat(); })
+    .catch(function(e){ showErr(p, e); renderStat(); });
+}
+
+function loadAll(){
+  return Promise.all([load('trae'), load('wb')]);
+}
+
+function runOne(p){
+  var btns = document.querySelectorAll('[data-run="' + p + '"]');
+  btns.forEach(function(b){ b.disabled = true; b.textContent = '签到中…'; });
+  showErr(p, '');
+  var url = p === 'trae' ? '/trae/api/run?force=1' : '/wb/api/run?force=1';
+  return api(url, { method:'POST', body:'{}' })
+    .then(function(d){
+      var bad = (d.results || []).filter(function(r){ return r.state==='error' || r.state==='token_dead'; });
+      if(bad.length) showErr(p, bad.map(function(r){ return r.label + ': ' + r.msg; }).join('\\n'));
+      return load(p);
+    })
+    .catch(function(e){ showErr(p, e); })
+    .then(function(){
+      btns.forEach(function(b){ b.disabled = false; b.textContent = '立即签到'; });
+    });
+}
+
+function runAll(){
+  var btn = $('#runAll');
+  btn.disabled = true; btn.textContent = '签到中…';
+  showErr('trae',''); showErr('wb','');
+  api('/api/run-all?force=1', { method:'POST', body:'{}' })
+    .then(function(d){
+      var lines = [];
+      ['trae','wb'].forEach(function(k){
+        var r = d[k] || {};
+        if(r.error){ lines.push((k==='trae'?'Trae':'WorkBuddy') + ': ' + r.error); return; }
+        (r.results || []).forEach(function(x){
+          if(x.state==='error' || x.state==='token_dead') lines.push(x.label + ': ' + x.msg);
+        });
+      });
+      if(lines.length){
+        showErr('trae', lines.join('\\n'));
+      }
+      return loadAll();
+    })
+    .catch(function(e){ showErr('trae', e); })
+    .then(function(){ btn.disabled = false; btn.textContent = '全部签到'; });
+}
+
+/* ---------------- 标签页 ---------------- */
+
+document.querySelectorAll('.tab').forEach(function(t){
+  t.onclick = function(){
+    var p = t.dataset.tab;
+    state.tab = p;
+    document.querySelectorAll('.tab').forEach(function(x){ x.classList.toggle('on', x === t); });
+    $('#panel-trae').hidden = p !== 'trae';
+    $('#panel-wb').hidden = p !== 'wb';
+  };
+});
+
+/* ---------------- Trae 扫码登录 ---------------- */
+
+/* 容器本身就在 127.0.0.1:17388 上监听 Trae 的授权回调，
+   所以扫码完成后服务端会直接接住 authCode、换令牌、入库，
+   这里只需要轮询本地状态，账号就自动出现在列表里。 */
+var traeTimer = null, traeTrace = '';
+
+function stopTraePoll(){ if(traeTimer){ clearInterval(traeTimer); traeTimer = null; } }
+function traeStatus(t){ $('#traeQrStatus').textContent = t; }
+
+function startTraeQr(){
+  stopTraePoll();
+  var btn = $('#traeQr');
+  var old = btn.textContent;
+  btn.disabled = true; btn.textContent = '准备中…';
+  $('#traeQrErr').textContent = '';
+  traeStatus('正在准备登录页…');
+  return api('/trae/api/login/start', { method:'POST', body: '{}' })
+    .then(function(d){
+      traeTrace = d.trace;
+      var w = window.open(d.authUrl, 'trae-login', 'width=520,height=820');
+      if(!w){
+        $('#traeQrStatus').innerHTML = '新窗口被拦截了：<a href="' + esc(d.authUrl) + '" target="_blank" rel="noopener">点这里打开登录页</a>';
+      }else{
+        traeStatus('已打开官方登录页 · 用抖音扫码并确认，完成后账号会自动出现，不用复制任何链接。');
+      }
+      var n = 0;
+      traeTimer = setInterval(function(){
+        if(++n > 450){
+          stopTraePoll();
+          traeStatus('这次登录已超时，请重新点「添加账号」。');
+          return;
+        }
+        api('/trae/api/login/poll?trace=' + encodeURIComponent(traeTrace)).then(function(r){
+          if(r.status === 'ok'){
+            stopTraePoll();
+            if(w && !w.closed){ try{ w.close(); }catch(e){} }
+            traeStatus('登录成功，已保存为「' + r.label + '」');
+            load('trae');
+          }else if(r.status === 'expired'){
+            stopTraePoll();
+            traeStatus('登录会话已过期（15 分钟），请重新点「添加账号」。');
+          }else if(r.status === 'error'){
+            stopTraePoll();
+            traeStatus('换取令牌失败：' + (r.error || '未知错误'));
+            $('#traeQrFallback').open = true;
+          }
+        }).catch(function(e){
+          stopTraePoll();
+          traeStatus(String(e.message || e));
+        });
+      }, 2000);
+    })
+    .catch(function(e){ traeStatus(String(e.message || e)); })
+    .then(function(){ btn.disabled = false; btn.textContent = old; });
+}
+
+/** 兜底：把粘贴进来的授权链接交给后端换取令牌并绑定账号 */
+function claimTrae(){
+  var btn = $('#traeQrClaim');
+  var url = $('#traeQrUrl').value.trim();
+  if(!url || btn.disabled) return;
+  $('#traeQrErr').textContent = '';
+  btn.disabled = true; btn.textContent = '绑定中…';
+  api('/trae/api/login/claim', { method:'POST', body: JSON.stringify({ url: url }) })
+    .then(function(d){
+      stopTraePoll();
+      traeStatus('登录成功，已保存为「' + d.label + '」');
+      $('#traeQrUrl').value = '';
+      return load('trae');
+    })
+    .catch(function(e){ $('#traeQrErr').textContent = String(e.message || e); })
+    .then(function(){ btn.disabled = false; btn.textContent = '绑定账号'; });
+}
+
+$('#traeQr').onclick = startTraeQr;
+
+$('#traeQrClaim').onclick = claimTrae;
+
+/* 粘上就直接绑定，省掉再点一次按钮 */
+$('#traeQrUrl').addEventListener('paste', function(){
+  setTimeout(function(){ if($('#traeQrUrl').value.trim()) claimTrae(); }, 0);
+});
+
+/* 回调页若能通知回来（同源开窗），立刻刷新列表 */
+window.addEventListener('message', function(e){
+  var d = e.data || {};
+  if(d.type !== 'trae-login') return;
+  if(d.ok){
+    stopTraePoll();
+    traeStatus('登录成功，已保存为「' + (d.label || '') + '」');
+    load('trae');
+  }else{
+    traeStatus('登录未完成，请重试');
+  }
+});
+
+/* 不是通过 127.0.0.1 打开的控制台，回调必然落不到容器上，
+   直接把「粘贴一次」的兜底展开说明，省得用户以为按钮坏了 */
+var TRAE_LOCAL = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/.test(location.hostname);
+if(!TRAE_LOCAL){
+  $('#traeMode').textContent = '远程 · 粘贴兜底';
+  traeStatus('当前不是通过 127.0.0.1 打开控制台：扫码后浏览器会跳到一个打不开的 127.0.0.1:17388 地址，请复制地址栏整段链接，粘贴到下面的输入框（粘上即自动绑定）。');
+  $('#traeQrFallback').open = true;
+}
+
+/* ---------------- WorkBuddy 扫码登录 ---------------- */
+
+var wbState = '', wbTimer = null;
+function stopWbQr(){ if(wbTimer){ clearInterval(wbTimer); wbTimer = null; } }
+
+$('#wbQr').onclick = function(){
+  stopWbQr();
+  var btn = $('#wbQr');
+  btn.disabled = true; btn.textContent = '获取中…';
+  showErr('wb', '');
+
+  /* 先同步开一个空窗口：官方登录页禁止被内嵌，只能整页打开；
+     又因为后面要等接口返回，异步里再开窗会被弹窗拦截 */
+  var win = window.open('about:blank', 'wb-login', 'width=640,height=880');
+
+  api('/wb/api/login/start', { method:'POST', body:'{}' })
+    .then(function(d){
+      wbState = d.state;
+      var opened = false;
+      if(win && !win.closed){
+        try { win.location.href = d.authUrl; opened = true; } catch(e) { opened = false; }
+      }
+      if(opened){
+        $('#wbQrStatus').textContent = '已在新窗口打开登录页，用微信扫码并确认，本页会自动保存账号。';
+      }else{
+        $('#wbQrStatus').innerHTML = '新窗口被拦截了：'
+          + '<a href="' + esc(d.authUrl) + '" target="_blank" rel="noopener">点这里打开登录页</a>';
+      }
+      btn.textContent = '添加账号';
+      btn.disabled = false;
+
+      var n = 0;
+      wbTimer = setInterval(function(){
+        if(n++ > 150){
+          stopWbQr();
+          $('#wbQrStatus').textContent = '二维码已过期，请点「添加账号」重试';
+          return;
+        }
+        api('/wb/api/login/poll?state=' + encodeURIComponent(wbState)).then(function(r){
+          if(r.status === 'ok'){
+            stopWbQr();
+            if(win && !win.closed){ try { win.close(); } catch(e){} }
+            $('#wbQrStatus').textContent = '登录成功，已保存为「' + r.label + '」';
+            load('wb');
+          }
+        }).catch(function(e){
+          stopWbQr();
+          $('#wbQrStatus').textContent = String(e.message || e);
+        });
+      }, 2500);
+    })
+    .catch(function(e){
+      if(win && !win.closed){ try { win.close(); } catch(err){} }
+      showErr('wb', e);
+      btn.textContent = '添加账号';
+      btn.disabled = false;
+    });
+};
+
+/* ---------------- 事件绑定 ---------------- */
+
+$('#loginbtn').onclick = function(){ login($('#pwd').value); };
+$('#pwd').onkeydown = function(e){ if(e.key === 'Enter') login($('#pwd').value); };
+$('#logout').onclick = function(){ if(confirm('退出登录？')) logout(''); };
+$('#runAll').onclick = runAll;
+
+document.querySelectorAll('[data-run]').forEach(function(b){
+  b.onclick = function(){ runOne(b.dataset.run); };
+});
+document.querySelectorAll('[data-refresh]').forEach(function(b){
+  b.onclick = function(){ load(b.dataset.refresh); };
+});
+
+/* 页面挂着过夜也能自动翻篇：只在日期真的变了才重新拉列表 */
+var dayMark = bjToday();
+setInterval(function(){
+  var d = bjToday();
+  if(d !== dayMark){ dayMark = d; if(state.tok) loadAll(); }
+}, 60000);
+
+var saved = localStorage.getItem(PWD_KEY);
+if(saved) login(saved);
+</script>
+</body>
+</html>

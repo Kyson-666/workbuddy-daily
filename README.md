@@ -1,325 +1,229 @@
-# Trae + WorkBuddy 每日签到 · Cloudflare Worker
+# Trae + WorkBuddy 每日签到 · 自托管 Docker 版
 
-把两个平台的每日签到都搬到云端：**不用开电脑、不用装客户端、不用守时间**。各扫一次码把账号托管进去，之后 Worker 自己续期令牌、按时签到、记录结果。
+把两个平台的每日签到搬到自己的机器上：一个容器、一个控制台、一条定时任务。
+**扫码后账号自动进列表，不用再复制回调链接。**
 
-**全部代码在 `worker.js` 一个文件里**——没有构建、没有依赖、没有 import，直接粘进 Cloudflare 网页控制台就能跑。
+- 运行时零依赖：`scratch` 镜像，只有一个静态二进制 + CA 证书，约 **7 MB**
+- 数据落在本地卷，令牌用 AES-256-GCM 加密，接口任何响应都不返回令牌
+- 支持 amd64 / arm64（群晖、树莓派、各种小主机）
 
-|        | Trae                           | WorkBuddy    |
-| ------ | ------------------------------ | ------------ |
-| 加账号    | 抖音扫码                           | 微信扫码         |
-| 凭据     | refreshToken + Worker 生成的设备密钥对 | refreshToken |
-| 签到内容   | 每日积分领取                         | 每日签到         |
-| 列表额外信息 | 余额、本次到账                        | 连签天数、本期累计    |
-
-两个平台共用一套部署、一个控制台、一条定时任务，账号数据同存一个 KV，按 `trae:` / `wb:` 前缀隔离，互不影响。
+> 算法与接口来自 [`ggzhzc/workbuddy-trae-checkin`](https://github.com/ggzhzc/workbuddy-trae-checkin)（Cloudflare Worker 版）。
+> 原始实现原样保留在 [`upstream/`](upstream/)，本仓库是它的自托管移植。
 
 ---
 
-## 一、部署
+## 一、和 Cloudflare Worker 版的差别
 
-全程在 Cloudflare 网页控制台完成，不用装任何工具、不用命令行。
-
-1. 打开 [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create**
-2. 起个名字（例如 `signin-all`），创建后点 **Edit code**
-3. 把 `worker.js` 全文粘进去 → **Deploy**
-4. 回到 Worker 设置页，加下面这组绑定：
-
-| 类型              | 名称            | 值                                              |
-| --------------- | ------------- | ---------------------------------------------- |
-| KV Namespace 绑定 | `KV`          | 先到 **Storage & Databases → KV** 新建一个命名空间，回来选中它 |
-| Secret          | `MASTER_KEY`  | 32 字节随机值的 base64，两个平台共用                        |
-| Secret          | `ADMIN_TOKEN` | 你自己定的**页面登录密码**                                |
-| Secret          | `CRON_SECRET` | 可选。给 `/cron` 用的独立口令，不配则回落到 `ADMIN_TOKEN`       |
-
-1. **Settings → Triggers → Cron Triggers** 加一条 `10 0 * * *`（= 北京时间 08:10）
-
-生成主密钥：浏览器按 F12 打开控制台，粘贴执行
-
-```js
-btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-```
-
-> 32 字节的 base64 一定是 **44 个字符、以 `=` 结尾**。长度不对就是复制漏了。
-
-> `MASTER_KEY` 丢了 = KV 里的令牌全部解不开，只能重新扫码。**存进密码管理器。**
+| | Worker 版 | 本版 |
+|---|---|---|
+| 部署位置 | Cloudflare 云端 | 自己的 Docker（NAS / 小主机 / 本机） |
+| 账号存储 | Cloudflare KV | 本地卷 `data/`，同样是加密记录 |
+| 定时任务 | CF Cron Triggers | 进程内定时器（`CRON_SCHEDULE`） |
+| Trae 扫码 | 复制地址栏 → 粘贴 | **容器直接接住回调，自动入库**；粘贴仅作兜底 |
+| WorkBuddy 扫码 | 自动 | 自动（不变） |
+| 镜像体积 | — | ~7 MB（scratch） |
+| 首次配置 | 手动建 KV / 三个 Secret | 只映射端口即可，密码与主密钥自动生成 |
 
 ---
 
-## 二、第一次打开
-
-部署后拿到一个形如 `https://signin-all.<你的子域>.workers.dev` 的地址。
-
-1. 打开它 → 输入 `ADMIN_TOKEN` → 点「登录」
-2. 登录成功自动载入两个平台的账号列表，都是空的即为正常
-
-登录状态记在本机浏览器（localStorage），下次打开自动登录。公共电脑用完点右上角「退出登录」清除。
-
-> **Trae 只认 `127.0.0.1` 回调**：官网往 `<本机>/...` 回送授权码，换成任何域名都会让登录页直接报「网络错误」。所以扫码的最后一步是「复制地址栏链接粘回来」，见下一节。
-
----
-
-## 三、添加账号
-
-控制台顶部有两个标签页：**Trae** 和 **WorkBuddy**，各自独立加号。
-
-### Trae：抖音扫码
-
-在 Trae 标签页右侧点 **「添加账号」**：
-
-1. 弹出官方授权页 `www.trae.cn/authorization`
-2. 用抖音扫码并确认
-3. 浏览器会跳到一个**打不开的** `http://127.0.0.1:17388/authorize?…` 页面 —— 这是正常的，本机没有服务在监听
-4. 在那个页面上按 `Ctrl+C` 复制地址栏（或直接全选地址栏复制），回到控制台**按一次 `Ctrl+V`** —— 输入框收到内容就会自动绑定，不用再点按钮
-
-链接里带着一次性授权码（`AuthCode`），Worker 拿它换 refreshToken 并加密入库。整个过程不需要在本机跑任何程序，粘一次就完成，之后靠 refreshToken 自动续期。
-
-![点「添加账号」弹出的 Trae 官方授权页：窗口背后就是控制台，扫码完成后浏览器会停在 127.0.0.1 的地址上](screenshot-console-trae.png)
-
-授权链接 15 分钟内有效，`AuthCode` 只能用一次；粘错了重新点一次扫码即可。
-
-**为什么不能全自动**：Trae 只把授权码回送到 `127.0.0.1` 上的某个端口，也就是**你自己电脑**。云端 Worker 没法访问你电脑上的端口，跨域也读不到那个弹窗的地址栏，Trae 又没有设备码授权可以绕开回调，所以最后这一下只能由浏览器里的人来完成。
-
-**本项目不采用任何本机程序**：不装客户端、不跑本地转发脚本、不监听端口。代价就是每个人每个账号多按一次 `Ctrl+V`，收益是任何一台设备打开网页就能用。
-
-> 设备密钥（ECDSA P-256）由 Worker 现场生成并加密保存，续期时的设备证明也由自己签名——**不需要装 Trae 客户端**。
-
-### WorkBuddy：微信扫码
-
-在 WorkBuddy 标签页点 **「添加账号」**：
-
-1. 新窗口打开官方登录页（`www.codebuddy.cn/login`），二维码**由官方页面渲染，本服务不接触你的微信信息**
-2. 微信扫码 → 手机上点确认
-3. Worker 轮询到授权结果 → 令牌加密存进 KV → 账号自动出现在列表里，登录窗口会自动关闭
-
-二维码有效期约 5–6 分钟，超时点「添加账号」重试。
-
-> **为什么整页打开而不是嵌在控制台里**：官方登录页响应头带了 `frame-ancestors 'self'`，禁止被第三方页面内嵌，硬塞进 iframe 只会是一片空白。所以改成在新窗口打开，扫码体验一样，只是多一个窗口。
-
-账号的**备注名优先取自账号昵称**，取不到时是 `Trae-xxxx` / `账号-xxxx`，点备注旁的铅笔随时能改，不用手动填表单。每个平台都能放多个账号，互不影响。
-
----
-
-## 四、控制台
-
-![签到控制台：左侧账号列表，右侧扫码登录](screenshot-console.png)
-
-> 图里是 Trae 标签页，选中的标签页是实心绿底，未选中是浅底灰字。WorkBuddy 标签页结构相同：账号表的「本次 / 余额」两列换成「连签 / 本期」，右侧换成微信扫码登录，顶栏「今日已签」显示的是两个平台的合计。截图里的「添加账号」弹窗见上一节。
-
-| 区域       | 说明                                            |
-| -------- | --------------------------------------------- |
-| 顶栏「今日已签」 | 两个平台合计：已签数 / 账号总数                             |
-| 全部签到     | 两个平台一起跑一轮，等同定时任务的逻辑                           |
-| 标签页      | Trae / WorkBuddy 分别管理，选中项为实心绿底高亮；标签上的数字是当日已签数 |
-| 立即签到     | 只跑当前标签页的账号                                    |
-| 刷新       | 重新拉取列表与状态                                     |
-| 退出登录     | 清除本机保存的密码，回到登录页                               |
-
-### Trae 账号表
-
-备注 / 状态 / 本次 / 余额 / 上次运行 / 删除
-
-> 备注名右边有一支铅笔，点名字或铅笔都能就地改名：光标直接落在原名字上，回车或点别处保存，`Esc` 放弃，全程不弹窗、不刷新整页。
->
-> 新账号为什么叫 `Trae-xxxx`：Trae 的授权回调只回传 AuthCode 和令牌，不带昵称，兑换令牌的响应里也没有，所以只能给个设备号后缀。WorkBuddy 登录后会多调一次用户资料接口，能取到昵称就直接显示昵称，取不到才叫 `账号-xxxx`。
-
-| 标签      | 含义                               |
-| ------- | -------------------------------- |
-| 已签      | 今天签上了，下方显示到账积分                   |
-| 今日未签    | 今天还没跑，或还没到定时时间                   |
-| 限流 N 分钟 | 服务端返回限流，Worker 已按账号冷却，到点后下一轮自动重试 |
-| 待确认     | 提交成功但服务端未回执到账，下一轮会再查一次           |
-| 签到失败    | 请求出错，下方显示原因                      |
-| 令牌失效    | refreshToken 失效，需要重新扫码           |
-| 缺设备密钥   | 账号记录异常（极少见），重新扫码即可               |
-
-### WorkBuddy 账号表
-
-备注 / 状态 / 连签 / 本期 / 上次运行 / 删除
-
-> 改备注的方式与 Trae 一致，点名字或铅笔就地编辑。两个平台的备注互不影响。
-
-| 标签   | 含义                     |
-| ---- | ---------------------- |
-| 已签   | 今天签上了                  |
-| 今日未签 | 今天还没跑                  |
-| 签到失败 | 请求出错，下方显示原因            |
-| 令牌失效 | refreshToken 失效，需要重新扫码 |
-
-> 所有状态都由**当天**现算（按北京时间），不存在「昨天签过、今天还显示已签」的情况。
-
-界面跟随系统自动切换深色/浅色；宽屏两栏（左账号、右扫码），窄于 1080px 变单栏，手机上账号表退化成卡片列表。
-
----
-
-## 五、定时任务
-
-**Cloudflare 的 Cron 只认 UTC。** 左列是填进 Cloudflare 的值，右列是北京时间：
-
-| 设置       | Cron（填这个）     | 对应北京时间       | 作用           |
-| -------- | ------------- | ------------ | ------------ |
-| **必设一条** | `10 0 * * *`  | **08:10**    | 每天两个平台各跑一遍   |
-| 选填（建议加）  | `20 16 * * *` | 次日 **00:20** | 多一次机会，失败能自动补 |
-
-**只设一条完全够用**：每次触发里 Trae 和 WorkBuddy 会依次各跑一遍，不是两个平台各配一条。
-
-第二条的意义是「一天两次机会」，而且对 Trae 尤其有用：
-
-- 北京时间 0 点前后是 Trae 的**早窗**，限流冷却只按 12 分钟算；白天则要 55 分钟
-- 也就是说 00:20 那趟如果撞上 9074，08:10 那趟大概率能补上
-- 只留 08:10 一条也不会签不上，只是撞限流时当天没有第二次自动机会，得手动点一下「立即签到」
-
-> 签到接口幂等（今天已签会直接返回"已签"，不重复加分），所以两条 cron 都留着、或者手动多点几次，都安全。
-
-改时间：**Settings → Triggers → Cron Triggers**。
-
-> 换算公式：**北京 = UTC + 8**。例如北京时间早上 9 点写成 `0 1 * * *`。
-
-### 改用外部定时器（选填）
-
-不想用 Cloudflare 自带 cron，或者想把签到并进已有的定时任务，可以从外面调 `/cron` 接口——跑的逻辑和「全部签到」一样。
+## 二、快速开始
 
 ```bash
-curl -X POST "https://signin-all.你的子域.workers.dev/cron" \
-  -H "X-Cron-Secret: 你的CRON_SECRET"
+git clone https://github.com/hanyuestar/workbuddy-trae-checkin.git
+cd workbuddy-trae-checkin
+cp .env.example .env        # 可全部留空
+docker compose up -d --build
 ```
+
+打开 <http://127.0.0.1:17388>，输入登录密码。
+
+密码从哪来：
+
+- `.env` 里填了 `ADMIN_TOKEN` → 就是你填的那个
+- 没填 → 首次启动自动生成，看日志一次：
+  ```bash
+  docker compose logs checkin | grep "登录密码"
+  ```
+  同时已保存到 `data/admin_token`，下次启动不再打印。
+
+不用 compose 也可以：
 
 ```bash
-# 也可以放 query（GET / POST 都行）
-curl "https://signin-all.你的子域.workers.dev/cron?key=你的CRON_SECRET"
+docker run -d --name checkin --restart unless-stopped \
+  -p 17388:17388 \
+  -v "$PWD/data:/data" \
+  -e TZ=Asia/Shanghai \
+  ghcr.io/hanyuestar/workbuddy-trae-checkin:latest
 ```
 
-返回两个平台各自的汇总：
+---
 
-```json
-{
-  "at": "2026-10-19T08:10:00.000 +08:00",
-  "trae": {
-    "at": "2026-10-19T08:10:01.000 +08:00",
-    "accounts": 1,
-    "checked": 1,
-    "already": 0,
-    "failed": 0,
-    "results": [
-      { "id": "ab12cd34", "label": "我的号", "state": "checked", "msg": "+100 积分" }
-    ]
-  },
-  "wb": {
-    "at": "2026-10-19T08:10:03.000 +08:00",
-    "accounts": 1,
-    "checked": 0,
-    "already": 1,
-    "failed": 0,
-    "results": [
-      { "id": "CSl88KP2yXIn", "label": "我的主号", "state": "skipped", "msg": "今日已完成" }
-    ]
-  }
-}
+## 三、添加账号：扫码即完成
+
+### Trae（抖音扫码，本机访问时全自动）
+
+1. Trae 标签页点 **「添加账号」**，弹出官网授权页
+2. 抖音扫码并确认
+3. 浏览器跳到 `127.0.0.1:17388/authorize?…` —— **这个请求直接打到了容器**
+4. 容器用 `AuthCode` + PKCE + 设备公钥换回 refreshToken，账号写入 `data/`，页面显示「登录成功」
+5. 控制台每 2 秒轮询一次登录状态，拿到结果后自动刷新列表
+
+全程零复制粘贴。
+
+**为什么能自动**：Trae 的授权页只允许把 AuthCode 回送到 `http://127.0.0.1:<端口>`，不认任何域名。原版 Worker 跑在云端，够不到你本机的端口，所以只能人工粘贴；本版把控制台直接跑在回调端口 `17388` 上，回调天然落在自己身上。
+
+**只有一种情况需要粘贴**：浏览器不在容器所在的那台机器上（例如容器跑在 NAS，你在电脑上开页面）。此时 `127.0.0.1` 指向你自己的电脑，回调落不到容器，控制台会把「手动粘贴」自动展开：
+
+- 复制那个打不开页面的**整段地址栏链接**，粘到输入框 —— 粘上即自动绑定，不用点按钮
+- 想在这种场景也全自动：本机做端口转发后改从 `127.0.0.1` 打开
+  ```bash
+  ssh -N -L 17388:127.0.0.1:17388 用户名@NAS地址
+  # 然后浏览器打开 http://127.0.0.1:17388
+  ```
+
+### WorkBuddy（微信扫码，自动）
+
+点 **「添加账号」** → 新窗口打开官方登录页 → 微信扫码确认 → 控制台轮询到结果后自动建号并关窗。二维码由官方页面渲染，本服务不接触你的微信信息。
+
+> 备注名优先取账号昵称，取不到时是 `Trae-xxxx` / `账号-xxxx`，点名字或铅笔可以就地改。
+
+---
+
+## 四、签到与定时任务
+
+- **立即签到**：只跑当前标签页；**全部签到**：两个平台一起跑
+- 签到接口本身幂等，重复点不会重复加分
+
+容器内置定时器，默认北京时间 **08:10** 和次日 **00:20** 各跑一次（两条互为兜底：Trae 在 0 点前后限流冷却只有 12 分钟，白天是 55 分钟）。
+
+```env
+CRON_SCHEDULE=08:10,00:20   # 逗号分隔，留空 = 关闭
 ```
 
-- `checked` 这次真签上了；`already` 今天已经签过；`failed` 失败或令牌失效
-- HTTP **401** = 口令不对；**500** = `CRON_SECRET` 和 `ADMIN_TOKEN` 都没配
+也可以用外部定时器触发（跑的逻辑与「全部签到」一致）：
 
-GitHub Actions 示例：
-
-```yaml
-on:
-  schedule:
-    - cron: '10 0 * * *'        # UTC 00:10 = 北京 08:10
-jobs:
-  signin:
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          curl -fsS -X POST "https://你的地址/cron" \
-            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}"
+```bash
+curl -X POST "http://你的地址:17388/cron" -H "X-Cron-Secret: 你的CRON_SECRET"
+# 或 GET /cron?key=...
 ```
 
-**注意**：这条接口只靠口令保护，别把带 `key` 的地址贴进公开仓库或聊天记录；怀疑泄露就换一个 `CRON_SECRET`。
-
-> Cloudflare 的 cron 和 `/cron` **二选一即可**，两边都配也不会重复签到。
+返回两个平台各自的汇总（`checked` / `already` / `failed`）。`CRON_SECRET` 没配时回落到 `ADMIN_TOKEN`。
 
 ---
 
-## 六、接口速查
+## 五、配置项
 
-所有管理接口都认三种口令写法：`X-Admin-Token: <token>`、`Authorization: Bearer <token>`、`?token=<token>`。
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PORT` | `17388` | 控制台端口；同时也是 Trae 的回调端口 |
+| `CALLBACK_PORT` | 同 `PORT` | 想换控制台端口时，可单独指定回调端口并额外映射 |
+| `DATA_DIR` | `/data` | 数据目录（compose 挂 `./data`） |
+| `ADMIN_TOKEN` | 自动生成 | 控制台登录密码 |
+| `MASTER_KEY` | 自动生成 | 32 字节 base64，账号记录的加密主密钥 |
+| `CRON_SCHEDULE` | `08:10,00:20` | 北京时间 `HH:MM`，逗号分隔；空 = 关闭 |
+| `CRON_SECRET` | 空 | `/cron` 独立口令，空则用 `ADMIN_TOKEN` |
+| `TZ` | `Asia/Shanghai` | 影响「今天」的判定与定时时间 |
 
-| 方法   | 路径                            | 说明                                                   |
-| ---- | ----------------------------- | ---------------------------------------------------- |
-| GET  | `/`                           | 控制台页面                                                |
-| GET  | `/api/ping`                   | 校验密码                                                 |
-| POST | `/api/run-all`                | 两个平台一起签，加 `?force=1` 强制重跑                            |
-| POST | `/cron`                       | 定时入口，口令走 `X-Cron-Secret` 或 `?key=`                   |
-| GET  | `/trae/api/list`              | Trae 账号列表                                            |
-| POST | `/trae/api/run`               | Trae 签到，加 `?force=1` 强制                              |
-| POST | `/trae/api/login/start`       | 生成抖音授权链接，无需 body                                     |
-| GET  | `/trae/api/login/poll?trace=` | 查询扫码结果                                               |
-| POST | `/trae/api/login/claim`       | 粘贴回调链接完成绑定，body `{"url":"..."}`                      |
-| POST | `/trae/api/accounts/remove`   | 删除 Trae 账号，body `{"id":"..."}`                       |
-| POST | `/trae/api/rename`            | 改 Trae 备注，body `{"id":"...","label":"..."}`（最长 40 字） |
-| GET  | `/wb/api/list`                | WorkBuddy 账号列表                                       |
-| POST | `/wb/api/run`                 | WorkBuddy 签到，加 `?force=1` 强制                         |
-| POST | `/wb/api/login/start`         | 生成微信扫码会话                                             |
-| GET  | `/wb/api/login/poll?state=`   | 查询扫码结果                                               |
-| POST | `/wb/api/remove`              | 删除 WorkBuddy 账号，body `{"id":"..."}`                  |
-| POST | `/wb/api/rename`              | 改 WorkBuddy 备注，body `{"id":"...","label":"..."}`     |
-| GET  | `/oauth/callback`             | 预留的授权回调入口，供回调页与主面板同源时直接通知                            |
-
-> `force=1` 只是跳过"今天签过就不请求"的本地判断，服务端本身幂等，不会重复加分。
+高级项（一般不用动）：`TRAE_CALLBACK_HOST` / `TRAE_CALLBACK_PORT`，改动后回调地址随之变化，自动回调可能失效。
 
 ---
 
-## 七、常见问题
+## 六、数据与安全
 
-| 现象                               | 原因                               | 处理                                       |
-| -------------------------------- | -------------------------------- | ---------------------------------------- |
-| 登录提示「登录密码不正确」                    | `ADMIN_TOKEN` 填错                 | 检查有没有多打空格                                |
-| 提示 `未配置 ADMIN_TOKEN`             | 这个 Secret 没建                     | 补建，名字要**完全等于** `ADMIN_TOKEN`             |
-| 提示 `缺少 MASTER_KEY`               | Secret 没建或名字拼错                   | 名字要**完全等于** `MASTER_KEY`                 |
-| 提示 `MASTER_KEY 必须是 32 字节`        | 主密钥复制不全                          | 重新生成，确认 44 字符且以 `=` 结尾                   |
-| 提示 `MASTER_KEY 不是合法 base64`      | 粘进了换行或引号                         | 只复制字符串本身                                 |
-| 提示 `未绑定 KV：…变量名填 KV`             | KV 没绑或绑定名写错                      | 绑定名必须**完全等于** `KV`                       |
-| 列表是空的                            | 还没添加账号；或 cron 还没到点               | 扫码添加，然后点「立即签到」                           |
-| 备注是一串 `Trae-xxxx` / `账号-xxxx`    | 那一次登录没拿到昵称（Trae 的回调本来就不带昵称）      | 点备注名或右侧铅笔就地改名，账号功能不受影响                   |
-| Trae 扫码后停在「无法访问此网站」              | 正常现象，官网只回送 127.0.0.1             | 复制该页地址栏的整段链接，回控制台按一次 `Ctrl+V`            |
-| Trae 登录页报「网络错误」                  | 打开的不是控制台生成的链接                    | 回控制台重新点「添加账号」，别手改链接里的回调地址                |
-| 粘贴后报「地址里没找到 authCodeInfo / code」 | 复制时漏了 `?` 后的部分，或复制成了搜索页地址        | 先把地址栏全选再复制                               |
-| Trae 显示「限流 N 分钟」                 | 服务端 9074 限流                      | 等冷却结束，下一轮自动重试；加一条 00:20 的 cron 更容易补上     |
-| Trae 显示「令牌失效」                    | 很久没跑，或账号在别处登出过                   | 重新扫码                                     |
-| WorkBuddy 登录窗口是空白页               | 浏览器把 `about:blank` 当广告拦了，或代理没加载完 | 重新点一次；仍空白就在状态里点链接直接打开                    |
-| 提示「登录会话已过期」                      | 二维码超过有效期没扫                       | 重新扫码                                     |
-| 一直没动静                            | cron 没配 / 时区搞错                   | 检查 Triggers 里那条 cron，注意填的是 UTC           |
-| `/cron` 返回 401                   | `key` / `X-Cron-Secret` 填错       | 口令须等于 `CRON_SECRET`，没配时回落到 `ADMIN_TOKEN` |
+```
+data/
+├── master.key      # 32 字节主密钥（base64），0600
+├── admin_token     # 自动生成的登录密码，0600
+└── kv/             # 每条账号记录一个文件，内容是 AES-256-GCM 密文
+```
 
-排查看实时日志：Worker 详情页的 **Logs**。
+- 密钥派生：`HKDF-SHA256(MASTER_KEY, 随机 16B salt, "trae-signin/v1/account" | "wb-signin/v1/account")`
+- 每条记录随机 salt + IV，密文格式与上游 Worker 一致（`{"v":1,"s":…,"i":…,"d":…}`），
+  从 Cloudflare KV 迁移过来的记录可以直接读
+- 列表接口只返回备注、状态、积分，**令牌与私钥永不下发**
+- **备份 `data/` 就是备份一切**：里面既有密文也有密钥，别外传、别进 Git
+- 换掉 `MASTER_KEY` = 已有账号全部解不开，只能重新扫码
 
 ---
 
-## 八、安全设计
+## 七、镜像与构建
 
-- KV 里存的是 **AES-256-GCM 密文**：每条记录自带随机 salt 与 IV，密钥由 `MASTER_KEY` 经 **HKDF-SHA256** 派生
-- KV 中永远不出现明文令牌；接口任何响应都不返回令牌，连前缀都不给
-- 登录密码与账号令牌分离——泄露登录密码不等于泄露账号
-- 口令比较走定长比较，避免时序侧信道
-- 登录密码只存在浏览器 localStorage，Worker 侧不落盘、不下发 Cookie
-- 页面零外部资源引用
+```bash
+# 本机架构
+docker build -t workbuddy-trae-checkin:latest .
 
-> 边界：令牌在 Worker 内存里必然有一刻是明文。云端能看到什么取决于你是否信任它——介意就部署到自己的账号下。
+# 多架构（需要 buildx）
+docker buildx build --platform linux/amd64,linux/arm64 -t <tag> --push .
+```
+
+7 MB 的来源：Go 静态二进制（`-trimpath -ldflags="-s -w"`，约 7.0 MB）+ `ca-certificates`（约 0.2 MB），
+运行镜像 `FROM scratch`，不含 shell、包管理器、Node、Python。
+
+时区库用 `time/tzdata` 编进二进制，所以 `scratch` 里也能正确按 `Asia/Shanghai` 算日期。
+
+本地开发：
+
+```bash
+go test ./...                                   # 含与上游 JS 的逐字节比对
+go build -o checkin . && ADMIN_TOKEN=dev DATA_DIR=./data ./checkin
+```
 
 ---
 
-## 九、已知限制
+## 八、接口速查
 
-1. **两个平台的接口都是逆向得到的**，客户端升级可能改路径或参数，届时需要跟进适配
-2. **只做签到**，没做成长中心那套（连登奖励、兑换、任务等）——那些接口参数更复杂、变动更频繁
-3. **扫码依赖官方登录页**，登录页改版或官方对非客户端来源做限制时可能失效
-4. **Trae 的授权码只能落到 127.0.0.1**，所以加账号的最后一步要手动粘贴一次回调链接；一个账号只需做一次，之后靠 refreshToken 自动续期
-5. 免费额度绰绰有余：Workers 10 万请求/天，KV 10 万读 / 1000 写 / 天——一天跑一两次，连零头都用不到
+所有管理接口认三种口令：`X-Admin-Token: <token>`、`Authorization: Bearer <token>`、`?token=<token>`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/` | 控制台 |
+| GET | `/authorize` | Trae 授权回调（自动入库，无需口令） |
+| GET | `/oauth/callback` | 同上，兼容上游路径 |
+| GET | `/api/ping` | 校验密码 |
+| POST | `/api/run-all` | 两个平台一起签（`?force=1` 强制） |
+| POST | `/cron` | 定时入口，口令走 `X-Cron-Secret` 或 `?key=` |
+| GET | `/trae/api/list` · POST `/trae/api/run` | Trae 列表 / 签到 |
+| POST | `/trae/api/login/start` · GET `/trae/api/login/poll` · POST `/trae/api/login/claim` | Trae 扫码三步 |
+| POST | `/trae/api/accounts/remove` · POST `/trae/api/rename` | 删除 / 改备注 |
+| GET | `/wb/api/list` · POST `/wb/api/run` | WorkBuddy 列表 / 签到 |
+| POST | `/wb/api/login/start` · GET `/wb/api/login/poll` | WorkBuddy 扫码两步 |
+| POST | `/wb/api/remove` · POST `/wb/api/rename` | 删除 / 改备注 |
 
 ---
 
-## 十、风险提示
+## 九、排错
 
-本项目为非官方工具，与 Trae、WorkBuddy 及其所属公司均无任何隶属关系。签到接口从各自客户端逆向得到，使用风险自负。
+| 现象 | 原因 / 处理 |
+|---|---|
+| 打不开控制台 | 端口没映射或被占用：`docker compose logs checkin`；换个 `PORT` 并同时映射 |
+| 「登录密码不正确」 | `.env` 里的 `ADMIN_TOKEN` 有多余空格，或改过之后没重启容器 |
+| 扫码后停在「无法访问此网站」 | 浏览器不在容器所在机器——这是正常的，复制地址栏整段链接粘到控制台即可（粘上即绑定） |
+| 回调页「登录会话已过期」 | 授权链接 15 分钟有效，重新点「添加账号」 |
+| Trae 显示「限流 N 分钟」 | 服务端 9074 限流，已按账号冷却，到点自动重试；0 点前后冷却只有 12 分钟 |
+| 「令牌失效」 | refreshToken 被别处轮换或长期未跑，删掉账号重新扫码 |
+| 「缺设备密钥」 | 账号记录异常（极少见），删掉重新扫码 |
+| 定时没跑 | 看日志 `定时签到已启用`；确认 `CRON_SCHEDULE` 是北京时间 `HH:MM` |
+| 想确认时区对不对 | 看 `docker logs` 行首的时间戳是否为北京时间 |
 
-自动化签到可能涉及服务条款问题。**建议只给自己的账号用，不要做多账号刷积分**——规模一大更容易被风控识别。项目提供多账号能力是为了方便管理你自己的号，不是鼓励滥用。
+---
+
+## 十、与上游同步
+
+`upstream/worker.js` 是原项目单文件实现，本仓库的 `trae.go` / `wb.go` 与它**逐函数对齐**
+（授权链接拼装、三套换令牌变体、设备证明签名、限流与待确认状态机、WorkBuddy 令牌轮换）。
+
+两个平台接口都是逆向得到的，客户端升级可能改路径或参数。上游更新时：
+
+```bash
+git fetch upstream && git diff upstream/main -- upstream/worker.js
+```
+
+按 diff 同步到对应的 Go 函数即可；`go test ./...` 里的基准值（`testdata/gen_fixture.js`）也可一并重生成。
+
+---
+
+## 致谢与声明
+
+- 原始实现：[ggzhzc/workbuddy-trae-checkin](https://github.com/ggzhzc/workbuddy-trae-checkin)
+- 本项目为非官方工具，与 Trae、WorkBuddy 及其所属公司无任何隶属关系
+- 签到接口由客户端逆向得到，平台升级可能导致失效；自动化签到可能涉及服务条款，**建议只给自己的账号使用**
