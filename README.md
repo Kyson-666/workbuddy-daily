@@ -1,9 +1,11 @@
 # Trae + WorkBuddy 每日签到 · 自托管 Docker 版
 
+[![docker](https://github.com/hanyuestar/workbuddy-daily/actions/workflows/docker.yml/badge.svg)](https://github.com/hanyuestar/workbuddy-daily/actions/workflows/docker.yml)
+
 把两个平台的每日签到搬到自己的机器上：一个容器、一个控制台、一条定时任务。
 **扫码后账号自动进列表，不用再复制回调链接。**
 
-- 运行时零依赖：`scratch` 镜像，只有一个静态二进制 + CA 证书，约 **7 MB**
+- 运行时零依赖：`scratch` 镜像，只有一个静态二进制 + CA 证书，拉取约 **3 MB**（解压约 7.2 MB）
 - 数据落在本地卷，令牌用 AES-256-GCM 加密，接口任何响应都不返回令牌
 - 支持 amd64 / arm64（群晖、树莓派、各种小主机）
 
@@ -21,7 +23,7 @@
 | 定时任务 | CF Cron Triggers | 进程内定时器（`CRON_SCHEDULE`） |
 | Trae 扫码 | 复制地址栏 → 粘贴 | **容器直接接住回调，自动入库**；粘贴仅作兜底 |
 | WorkBuddy 扫码 | 自动 | 自动（不变） |
-| 镜像体积 | — | ~7 MB（scratch） |
+| 镜像体积 | — | 拉取 ~3 MB / 解压 7.2 MB |
 | 首次配置 | 手动建 KV / 三个 Secret | 只映射端口即可，密码与主密钥自动生成 |
 
 ---
@@ -32,7 +34,13 @@
 git clone https://github.com/hanyuestar/workbuddy-daily.git
 cd workbuddy-daily
 cp .env.example .env        # 可全部留空
-docker compose up -d --build
+docker compose up -d        # 直接拉已发布镜像；想自己构建加 --build
+```
+
+已发布镜像（公开，amd64 + arm64，每次 push 到 main 自动构建）：
+
+```
+ghcr.io/hanyuestar/workbuddy-daily:latest
 ```
 
 打开 <http://127.0.0.1:17388>，输入登录密码。
@@ -156,8 +164,8 @@ docker build -t workbuddy-daily:latest .
 docker buildx build --platform linux/amd64,linux/arm64 -t <tag> --push .
 ```
 
-7 MB 的来源：Go 静态二进制（`-trimpath -ldflags="-s -w"`，约 7.0 MB）+ `ca-certificates`（约 0.2 MB），
-运行镜像 `FROM scratch`，不含 shell、包管理器、Node、Python。
+体积实测（amd64）：Go 静态二进制 7.0 MB（gzip 后 2.9 MB）+ `ca-certificates` 0.2 MB（gzip 后 0.12 MB），
+**拉取总量 3.01 MB**，解压后约 7.2 MB。运行镜像 `FROM scratch`，不含 shell、包管理器、Node、Python。
 
 时区库用 `time/tzdata` 编进二进制，所以 `scratch` 里也能正确按 `Asia/Shanghai` 算日期。
 
