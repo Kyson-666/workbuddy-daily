@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata" // 内嵌时区库：scratch 镜像里没有 zoneinfo，也要能 LoadLocation("Asia/Shanghai")
@@ -85,15 +84,6 @@ func loadConfig() (*Config, error) {
 func envOr(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
-	}
-	return def
-}
-
-func envInt(key string, def int) int {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
 	}
 	return def
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 )
@@ -16,10 +15,6 @@ func logf(format string, args ...any) {
 }
 
 /* ---------------- 随机与编码 ---------------- */
-
-func randomBytesStr(n int) string {
-	return string(randomBytes(n))
-}
 
 func b64url(b []byte) string {
 	return base64.RawURLEncoding.EncodeToString(b)
@@ -117,14 +112,6 @@ func asFloat(v any) (float64, bool) {
 	}
 }
 
-func asInt64(v any) int64 {
-	f, ok := asFloat(v)
-	if !ok {
-		return 0
-	}
-	return int64(f)
-}
-
 func asBool(v any) bool {
 	b, _ := v.(bool)
 	return b
@@ -176,8 +163,3 @@ func mustJSON(v any) []byte {
 }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}

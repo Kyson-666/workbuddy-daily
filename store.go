@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -101,27 +100,3 @@ func (s scopedKV) Put(k, v string, ttl time.Duration) error {
 	return s.kv.Put(s.prefix+k, v, ttl)
 }
 func (s scopedKV) Delete(k string) error { return s.kv.Delete(s.prefix + k) }
-
-func (s scopedKV) List(prefix string) []string {
-	entries, err := os.ReadDir(s.kv.dir)
-	if err != nil {
-		return nil
-	}
-	out := []string{}
-	for _, ent := range entries {
-		name := ent.Name()
-		if !strings.HasSuffix(name, ".kv") {
-			continue
-		}
-		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSuffix(name, ".kv"))
-		if err != nil {
-			continue
-		}
-		key := string(raw)
-		if !strings.HasPrefix(key, s.prefix+prefix) {
-			continue
-		}
-		out = append(out, strings.TrimPrefix(key, s.prefix))
-	}
-	return out
-}

@@ -125,9 +125,8 @@ type traeLoginSession struct {
 }
 
 const (
-	traeIndexKey   = "index:accounts"
-	traeLatestKey  = "login:latest"
-	traeAuditLabel = "trae"
+	traeIndexKey  = "index:accounts"
+	traeLatestKey = "login:latest"
 )
 
 func (a *App) traeKV() scopedKV { return scopedKV{kv: a.kv, prefix: "trae:"} }
