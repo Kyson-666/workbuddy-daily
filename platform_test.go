@@ -64,6 +64,26 @@ func TestPlatformRegistry(t *testing.T) {
 	}
 }
 
+// TestSealInfoMatchesUpstream 存储前缀与加密标签都由 key 派生，
+// 派生的结果必须与上游 CF 版用过的字面量一致，否则老数据就解不开了。
+func TestSealInfoMatchesUpstream(t *testing.T) {
+	app := newTestApp(t)
+	cases := map[string]string{
+		"trae":  infoTrae,
+		"wb":    infoWB,
+		"qoder": "qoder-signin/v1/account",
+	}
+	for key, want := range cases {
+		st := newPlatStore(app.kv, key, app.cfg.MasterKey)
+		if st.info != want {
+			t.Fatalf("%s 的加密标签应为 %q，实际 %q", key, want, st.info)
+		}
+		if st.prefix != key+":" {
+			t.Fatalf("%s 的 KV 前缀应为 %q，实际 %q", key, key+":", st.prefix)
+		}
+	}
+}
+
 func TestRouteDispatch(t *testing.T) {
 	app := newTestApp(t)
 	mux := httptest.NewServer(app)

@@ -89,7 +89,7 @@ func (kv *KV) Delete(key string) error {
 	return nil
 }
 
-// scopedKV 按前缀隔离两个平台，对应 worker.js 里的 kvScope。
+// scopedKV 按前缀隔离各平台，对应 worker.js 里的 kvScope。
 type scopedKV struct {
 	kv     *KV
 	prefix string

@@ -21,6 +21,9 @@ import (
 //	box = AES-256-GCM(key, iv=12B) → JSON {"v":1,"s":salt,"i":iv,"d":ct||tag}
 //
 // 这样 Cloudflare KV 里已有的记录可以直接搬过来解密。
+//
+// 这两个常量是与上游（CF 版）互通的基准值。新平台按 `<key>-signin/v1/account`
+// 派生同样的格式，platform_test.go 里有断言保证派生结果与这里一致。
 const (
 	infoTrae = "trae-signin/v1/account"
 	infoWB   = "wb-signin/v1/account"
