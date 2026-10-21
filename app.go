@@ -7,22 +7,31 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 //go:embed console.html
 var consoleHTML []byte
 
 type App struct {
-	cfg *Config
-	kv  *KV
+	cfg   *Config
+	kv    *KV
+	regs  []*platformEntry
+	store map[string]*platStore
 }
 
+// NewApp 里注册平台，顺序就是控制台菜单顺序。
+// 加一个新签到平台 = 加一个实现了 Platform 的文件 + 这里一行 registerPlatform。
 func NewApp(cfg *Config) (*App, error) {
 	kv, err := NewKV(cfg.DataDir + "/kv")
 	if err != nil {
 		return nil, err
 	}
-	return &App{cfg: cfg, kv: kv}, nil
+	a := &App{cfg: cfg, kv: kv, store: map[string]*platStore{}}
+	a.registerPlatform(&traePlatform{})
+	a.registerPlatform(&wbPlatform{})
+	a.registerPlatform(&qoderPlatform{})
+	return a, nil
 }
 
 /* ---------------- 响应辅助 ---------------- */
@@ -60,6 +69,32 @@ func readJSONBody(r *http.Request) map[string]any {
 		return map[string]any{}
 	}
 	return out
+}
+
+/* ---------------- 访问日志（LOG_REQUESTS=1 时开启，用于排查反代） ---------------- */
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func withRequestLog(on bool, h http.Handler) http.Handler {
+	if !on {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		h.ServeHTTP(rec, r)
+		logf("http %s %s -> %d %dms ua=%q",
+			r.Method, r.URL.RequestURI(), rec.status, time.Since(started).Milliseconds(),
+			truncate(r.UserAgent(), 48))
+	})
 }
 
 /* ---------------- 鉴权 ---------------- */

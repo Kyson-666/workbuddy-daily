@@ -22,64 +22,26 @@ const (
 
 var wbAPIBase = wbAPI
 
-const (
-	wbIndexKey = "index:accounts"
-)
+// 账户结构已上提到 platform.go 的 Account（WBAccount 是它的别名）。
 
-type WBAccount struct {
-	ID               string   `json:"id"`
-	Label            string   `json:"label"`
-	RefreshToken     string   `json:"refreshToken"`
-	CreatedAt        int64    `json:"createdAt"`
-	LastState        string   `json:"lastState"`
-	LastMsg          string   `json:"lastMsg"`
-	LastRun          int64    `json:"lastRun"`
-	LastOkDate       string   `json:"lastOkDate"`
-	Streak           *float64 `json:"streak"`
-	Total            *float64 `json:"total"`
-	LastCredit       float64  `json:"lastCredit"`
-	TotalSigned      int      `json:"totalSigned"`
-	TokenRefreshedAt int64    `json:"tokenRefreshedAt"`
-	Verified         bool     `json:"verified"`
+type wbLoginSession struct {
+	State     string `json:"state"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
-func (a *App) wbKV() scopedKV { return scopedKV{kv: a.kv, prefix: "wb:"} }
+// 以下转发到通用存取：前缀与加密标签由 key 派生，旧的 wb: 记录零迁移就能读。
 
-func (a *App) wbListMeta() ([]accountMeta, error) {
-	raw, ok := a.wbKV().Get(wbIndexKey)
-	if !ok {
-		return []accountMeta{}, nil
-	}
-	var list []accountMeta
-	if err := jsonUnmarshal([]byte(raw), &list); err != nil {
-		return nil, err
-	}
-	return list, nil
-}
+func (a *App) wbKV() scopedKV { return a.storeOf("wb").sc() }
 
-func (a *App) wbSaveIndex(list []accountMeta) error {
-	return a.wbKV().Put(wbIndexKey, string(mustJSON(list)), 0)
-}
+func (a *App) wbListMeta() ([]accountMeta, error) { return a.storeOf("wb").ListMeta() }
 
-func (a *App) wbGet(id string) (*WBAccount, error) {
-	raw, ok := a.wbKV().Get("acct:" + id)
-	if !ok {
-		return nil, nil
-	}
-	var acct WBAccount
-	if err := openRecord(a.cfg.MasterKey, infoWB, raw, &acct); err != nil {
-		return nil, err
-	}
-	return &acct, nil
-}
+func (a *App) wbSaveIndex(list []accountMeta) error { return a.storeOf("wb").SaveMeta(list) }
 
-func (a *App) wbPut(acct *WBAccount) error {
-	sealed, err := sealRecord(a.cfg.MasterKey, infoWB, acct)
-	if err != nil {
-		return err
-	}
-	return a.wbKV().Put("acct:"+acct.ID, sealed, 0)
-}
+func (a *App) wbGet(id string) (*WBAccount, error) { return a.storeOf("wb").Get(id) }
+
+func (a *App) wbPut(acct *WBAccount) error { return a.storeOf("wb").Put(acct) }
+
+func (a *App) wbAppend(acct *WBAccount) error { return a.storeOf("wb").Append(acct) }
 
 /* ------------------------------------------------------------------ */
 /* 与 WorkBuddy 服务端交互                                              */
@@ -226,15 +188,7 @@ func (a *App) wbPersistAccount(ctx context.Context, refreshToken, label, accessT
 		Verified:         true,
 		TokenRefreshedAt: now,
 	}
-	if err := a.wbPut(acct); err != nil {
-		return nil, err
-	}
-	list, err := a.wbListMeta()
-	if err != nil {
-		return nil, err
-	}
-	list = append(list, accountMeta{ID: id, Label: name, CreatedAt: now})
-	if err := a.wbSaveIndex(list); err != nil {
+	if err := a.wbAppend(acct); err != nil {
 		return nil, err
 	}
 	return acct, nil
@@ -351,7 +305,8 @@ func (a *App) wbSigninOne(ctx context.Context, acct *WBAccount, force bool) sign
 		}
 		acct.LastOkDate = today
 		if result.State == "checked" {
-			acct.LastCredit = result.Credit
+			credit := result.Credit
+			acct.LastCredit = &credit
 			acct.TotalSigned++
 		}
 	}
@@ -359,4 +314,95 @@ func (a *App) wbSigninOne(ctx context.Context, acct *WBAccount, force bool) sign
 	_ = a.wbPut(acct)
 	return signinResult{ID: acct.ID, Label: acct.Label, State: acct.LastState, Msg: acct.LastMsg,
 		Streak: streak, Total: total}
+}
+
+/* ================================================================== */
+/* WorkBuddy 适配器                                                    */
+/* ================================================================== */
+
+type wbPlatform struct{}
+
+func (p *wbPlatform) Key() string     { return "wb" }
+func (p *wbPlatform) Label() string   { return "WorkBuddy" }
+func (p *wbPlatform) Flow() LoginFlow { return FlowLink }
+
+func (p *wbPlatform) Caps() Caps {
+	return Caps{Streak: true, Credits: true}
+}
+
+func (p *wbPlatform) Metrics() []Metric {
+	return []Metric{{K: "streak", Label: "连签"}, {K: "total", Label: "Credits"}}
+}
+
+func (p *wbPlatform) Describe(acct *Account, v viewCtx) (string, string, string) {
+	switch {
+	case v.SignedToday:
+		if acct.LastState == "checked" {
+			return "已签", "ok", acct.LastMsg
+		}
+		return "已签", "ok", ""
+	case acct.LastState == "token_dead":
+		return "令牌失效", "bad", acct.LastMsg
+	case acct.LastState == "error" && v.RanToday:
+		return "签到失败", "bad", acct.LastMsg
+	}
+	return "今日未签", "idle", ""
+}
+
+func (p *wbPlatform) StartLogin(ctx context.Context, a *App) (LoginHandle, error) {
+	state, authURL, err := a.wbRequestLoginState(ctx)
+	if err != nil {
+		return LoginHandle{}, err
+	}
+	// 记下 state 是我们发出去的，避免有人拿别人的 state 来轮询
+	if err := a.storeOf("wb").PutSession(state, &wbLoginSession{
+		State:     state,
+		CreatedAt: time.Now().UnixMilli(),
+	}, wbLogin); err != nil {
+		return LoginHandle{}, err
+	}
+	return LoginHandle{ID: state, AuthURL: authURL}, nil
+}
+
+func (p *wbPlatform) PollLogin(ctx context.Context, a *App, id string) (LoginPoll, error) {
+	st := a.storeOf("wb")
+	var sess wbLoginSession
+	if !st.GetSession(id, &sess) {
+		return LoginPoll{Status: "expired"}, nil
+	}
+	pending, tokens, err := a.wbPollLoginToken(ctx, id)
+	if err != nil {
+		return LoginPoll{}, err
+	}
+	if pending {
+		return LoginPoll{Status: "pending"}, nil
+	}
+	if strings.TrimSpace(tokens.RefreshToken) == "" {
+		return LoginPoll{}, errors.New("登录成功但服务端没返回 refreshToken")
+	}
+	acct, err := a.wbPersistAccount(ctx, tokens.RefreshToken, "", tokens.AccessToken)
+	if err != nil {
+		return LoginPoll{}, err
+	}
+	st.DeleteSession(id)
+	return LoginPoll{Status: "ok", ID: acct.ID, Label: acct.Label}, nil
+}
+
+func (p *wbPlatform) CompleteLogin(ctx context.Context, a *App, id string, in LoginInput) (*LoginOutcome, error) {
+	return nil, errors.New("WorkBuddy 在页面里扫码即可，不需要粘贴地址")
+}
+
+func (p *wbPlatform) Signin(ctx context.Context, a *App, acct *Account, force bool) signinResult {
+	return a.wbSigninOne(ctx, acct, force)
+}
+
+// Keepalive 只续令牌，不触发签到。
+func (p *wbPlatform) Keepalive(ctx context.Context, a *App, acct *Account) error {
+	tokens, err := a.wbRefreshTokens(ctx, acct.RefreshToken)
+	if err != nil {
+		return err
+	}
+	acct.RefreshToken = tokens.RefreshToken
+	acct.TokenRefreshedAt = time.Now().UnixMilli()
+	return a.wbPut(acct)
 }

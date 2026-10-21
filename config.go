@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata" // 内嵌时区库：scratch 镜像里没有 zoneinfo，也要能 LoadLocation("Asia/Shanghai")
@@ -21,6 +22,10 @@ type Config struct {
 	Schedules    []string // 北京时间 "HH:MM" 列表，空 = 不自动签到
 	Loc          *time.Location
 	TraeCallback string // 交给 Trae 的回调地址，必须是 127.0.0.1
+
+	KeepaliveDays int    // 连续这么久没签到成功的账号，定时只刷新令牌（0 = 关闭保活）
+	KeepaliveSlot string // 保活时间点，非空时一并进 Schedules
+	LogRequests   bool   // LOG_REQUESTS=1 时打印每个请求，用于排查反代
 }
 
 func loadConfig() (*Config, error) {
@@ -62,6 +67,9 @@ func loadConfig() (*Config, error) {
 
 	// 定时任务时间（北京时间）。上游推荐 08:10 + 次日 00:20，两次机会互为兜底。
 	raw := envOr("CRON_SCHEDULE", "08:10,00:20")
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CRON_SCHEDULE")), "off") {
+		raw = ""
+	}
 	for _, part := range strings.Split(raw, ",") {
 		p := strings.TrimSpace(part)
 		if p == "" {
@@ -72,6 +80,23 @@ func loadConfig() (*Config, error) {
 		}
 		cfg.Schedules = append(cfg.Schedules, p)
 	}
+
+	// 保活：默认关闭。开启后每天固定时间把「很久没签到」的账号只刷新令牌。
+	if raw := strings.TrimSpace(os.Getenv("KEEPALIVE_DAYS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err != nil || n <= 0 {
+			return nil, fmt.Errorf("KEEPALIVE_DAYS 需要是正整数，当前 %q", raw)
+		} else {
+			cfg.KeepaliveDays = n
+			slot := envOr("KEEPALIVE_TIME", "12:30")
+			if _, err := time.Parse("15:04", slot); err != nil {
+				return nil, fmt.Errorf("KEEPALIVE_TIME 里的 %q 不是 HH:MM 格式", slot)
+			}
+			cfg.KeepaliveSlot = slot
+			cfg.Schedules = append(cfg.Schedules, slot)
+		}
+	}
+
+	cfg.LogRequests = os.Getenv("LOG_REQUESTS") == "1"
 
 	// Trae 只认 http://127.0.0.1:<端口> 作为回调，换域名会直接「网络错误」。
 	cbHost := envOr("TRAE_CALLBACK_HOST", "127.0.0.1")

@@ -28,10 +28,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	handler := withRequestLog(cfg.LogRequests, app)
+
 	mainAddr := addrOf(cfg.Port)
 	srv := &http.Server{
 		Addr:              mainAddr,
-		Handler:           app,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -46,7 +48,7 @@ func main() {
 	if cfg.CallbackPort != "" && addrOf(cfg.CallbackPort) != mainAddr {
 		cbSrv = &http.Server{
 			Addr:              addrOf(cfg.CallbackPort),
-			Handler:           app,
+			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		go func() {
@@ -73,6 +75,12 @@ func main() {
 	}
 	if len(cfg.Schedules) > 0 {
 		logf("  定时签到   %v", cfg.Schedules)
+	}
+	if cfg.KeepaliveSlot != "" {
+		logf("  保活刷新   每天 %s（连续 %d 天未签到才刷）", cfg.KeepaliveSlot, cfg.KeepaliveDays)
+	}
+	if cfg.LogRequests {
+		logf("  访问日志   已开启（LOG_REQUESTS=1）")
 	}
 	if cfg.TraeCallback != "http://127.0.0.1:"+cfg.CallbackPort+"/authorize" {
 		logf("  提示       自定义回调地址后，扫码需要手动粘贴回调链接")

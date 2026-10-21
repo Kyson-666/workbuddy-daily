@@ -57,21 +57,66 @@ func (a *App) runScheduled(slot string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	if slot == a.cfg.KeepaliveSlot {
+		a.runKeepalive(ctx)
+		return
+	}
+
 	logf("⏰ 定时签到开始（%s）", slot)
 	started := time.Now()
 
-	trae := a.runTrae(ctx, false)
-	logf("   Trae     账号 %d · 签到成功 %d · 今日已签 %d · 失败 %d",
-		trae.Accounts, trae.Checked, trae.Already, trae.Failed)
-
-	wb := a.runWB(ctx, false)
-	logf("   WorkBuddy 账号 %d · 签到成功 %d · 今日已签 %d · 失败 %d",
-		wb.Accounts, wb.Checked, wb.Already, wb.Failed)
-
-	for _, r := range append(trae.Results, wb.Results...) {
-		if r.State == "error" || r.State == "token_dead" {
-			logf("   ! %s: %s", r.Label, r.Msg)
+	summaries := a.runAll(ctx, false)
+	for _, e := range a.regs {
+		s, _ := summaries[e.p.Key()].(runSummary)
+		logf("   %s 账号 %d · 签到成功 %d · 今日已签 %d · 冷却 %d · 失败 %d",
+			e.p.Label(), s.Accounts, s.Checked, s.Already, s.Cooling, s.Failed)
+		for _, r := range s.Results {
+			if r.State == "error" || r.State == "token_dead" {
+				logf("   ! %s: %s", r.Label, r.Msg)
+			}
 		}
 	}
 	logf("⏰ 定时签到结束，用时 %.1fs", time.Since(started).Seconds())
+}
+
+// runKeepalive 只刷新令牌，不签到：长期不跑的账号不会因为令牌过期而变成 token_dead。
+//
+// 注意：Trae / WorkBuddy 的 refreshToken 都是轮换制，刷新会让官方客户端里的旧令牌
+// 失效。所以这个功能默认关闭，且只处理「很久没签到」的账号。
+func (a *App) runKeepalive(ctx context.Context) {
+	logf("🔁 保活刷新开始（连续 %d 天未签到）", a.cfg.KeepaliveDays)
+	started := time.Now()
+	today := time.Now().In(a.cfg.Loc).Format("2006-01-02")
+
+	done, skipped, failed := 0, 0, 0
+	for _, e := range a.regs {
+		kp, ok := e.p.(keepaliver)
+		if !ok {
+			continue
+		}
+		st := a.storeOf(e.p.Key())
+		list, err := st.ListMeta()
+		if err != nil {
+			logf("   ! %s 读取账号列表失败: %s", e.p.Label(), err.Error())
+			continue
+		}
+		for _, meta := range list {
+			acct, err := st.Get(meta.ID)
+			if err != nil || acct == nil {
+				continue
+			}
+			if daysBetween(acct.LastOkDate, today, a.cfg.Loc) < a.cfg.KeepaliveDays {
+				skipped++
+				continue
+			}
+			if err := kp.Keepalive(ctx, a, acct); err != nil {
+				failed++
+				logf("   ! %s %s: %s", e.p.Label(), acct.Label, err.Error())
+				continue
+			}
+			done++
+		}
+	}
+	logf("🔁 保活刷新结束：刷新 %d · 跳过 %d · 失败 %d，用时 %.1fs",
+		done, skipped, failed, time.Since(started).Seconds())
 }

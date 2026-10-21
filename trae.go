@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -66,44 +67,8 @@ var (
 	traeExchangeLegacyEP = epTraeExchangeLegacy
 )
 
-type TraeAccount struct {
-	ID               string   `json:"id"`
-	Label            string   `json:"label"`
-	RefreshToken     string   `json:"refreshToken"`
-	DeviceID         string   `json:"deviceId"`
-	MachineID        string   `json:"machineId"`
-	PrivateKeyPEM    string   `json:"privateKeyPem"`
-	PublicKeyPEM     string   `json:"publicKeyPem"`
-	DeviceName       string   `json:"deviceName"`
-	DeviceModel      string   `json:"deviceModel"`
-	DeviceBrand      string   `json:"deviceBrand"`
-	DeviceType       string   `json:"deviceType"`
-	OSInfo           string   `json:"osInfo"`
-	OSVersion        string   `json:"osVersion"`
-	ClientID         string   `json:"clientId"`
-	PlatformCode     string   `json:"platformCode"`
-	Source           string   `json:"source"`
-	CreatedAt        int64    `json:"createdAt"`
-	LastState        string   `json:"lastState"`
-	LastMsg          string   `json:"lastMsg"`
-	LastRun          int64    `json:"lastRun"`
-	LastOkDate       string   `json:"lastOkDate"`
-	LastCredit       *float64 `json:"lastCredit"`
-	TotalCredit      float64  `json:"totalCredit"`
-	TotalSigned      int      `json:"totalSigned"`
-	Credits          *float64 `json:"credits"`
-	CheckedIn        bool     `json:"checkedIn"`
-	CooldownUntil    int64    `json:"cooldownUntil"`
-	AccessToken      string   `json:"accessToken"`
-	AccessExp        int64    `json:"accessExp"`
-	TokenRefreshedAt int64    `json:"tokenRefreshedAt"`
-}
-
-type accountMeta struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	CreatedAt int64  `json:"createdAt"`
-}
+// 账户结构已上提到 platform.go 的 Account（TraeAccount 是它的别名），
+// 这里只保留 Trae 独有的登录会话。
 
 type traeLoginSession struct {
 	Trace         string `json:"trace"`
@@ -124,52 +89,24 @@ type traeLoginSession struct {
 	CreatedAt     int64  `json:"createdAt"`
 }
 
-const (
-	traeIndexKey  = "index:accounts"
-	traeLatestKey = "login:latest"
-)
-
-func (a *App) traeKV() scopedKV { return scopedKV{kv: a.kv, prefix: "trae:"} }
+func (a *App) traeKV() scopedKV { return a.storeOf("trae").sc() }
 
 /* ------------------------------------------------------------------ */
 /* 账号存取（密文，令牌永不出现在响应里）                                */
 /* ------------------------------------------------------------------ */
 
-func (a *App) traeListMeta() ([]accountMeta, error) {
-	raw, ok := a.traeKV().Get(traeIndexKey)
-	if !ok {
-		return []accountMeta{}, nil
-	}
-	var list []accountMeta
-	if err := json.Unmarshal([]byte(raw), &list); err != nil {
-		return nil, err
-	}
-	return list, nil
-}
+// 以下四个只是转发到通用存取：前缀与加密标签由 key 派生，
+// 磁盘上已有的 trae: 记录零迁移就能读。
 
-func (a *App) traeSaveIndex(list []accountMeta) error {
-	return a.traeKV().Put(traeIndexKey, string(mustJSON(list)), 0)
-}
+func (a *App) traeListMeta() ([]accountMeta, error) { return a.storeOf("trae").ListMeta() }
 
-func (a *App) traeGet(id string) (*TraeAccount, error) {
-	raw, ok := a.traeKV().Get("acct:" + id)
-	if !ok {
-		return nil, nil
-	}
-	var acct TraeAccount
-	if err := openRecord(a.cfg.MasterKey, infoTrae, raw, &acct); err != nil {
-		return nil, err
-	}
-	return &acct, nil
-}
+func (a *App) traeSaveIndex(list []accountMeta) error { return a.storeOf("trae").SaveMeta(list) }
 
-func (a *App) traePut(acct *TraeAccount) error {
-	sealed, err := sealRecord(a.cfg.MasterKey, infoTrae, acct)
-	if err != nil {
-		return err
-	}
-	return a.traeKV().Put("acct:"+acct.ID, sealed, 0)
-}
+func (a *App) traeGet(id string) (*TraeAccount, error) { return a.storeOf("trae").Get(id) }
+
+func (a *App) traePut(acct *TraeAccount) error { return a.storeOf("trae").Put(acct) }
+
+func (a *App) traeAppend(acct *TraeAccount) error { return a.storeOf("trae").Append(acct) }
 
 /* ------------------------------------------------------------------ */
 /* 时间辅助                                                            */
@@ -818,32 +755,23 @@ func buildAuthorizeURL(authFrom, clientID, trace, callback, deviceID, machineID,
 }
 
 func (a *App) putTraeLoginSession(sess *traeLoginSession) error {
-	sealed, err := sealRecord(a.cfg.MasterKey, infoTrae, sess)
-	if err != nil {
+	st := a.storeOf("trae")
+	if err := st.PutSession(sess.Trace, sess, traeLoginTTL); err != nil {
 		return err
 	}
-	if err := a.traeKV().Put("login:"+sess.Trace, sealed, traeLoginTTL); err != nil {
-		return err
-	}
-	return a.traeKV().Put(traeLatestKey, sess.Trace, traeLoginTTL)
+	st.SetLatest(sess.Trace, traeLoginTTL)
+	return nil
 }
 
 func (a *App) getTraeLoginSession(trace string) *traeLoginSession {
-	raw, ok := a.traeKV().Get("login:" + trace)
-	if !ok {
-		return nil
-	}
 	var sess traeLoginSession
-	if err := openRecord(a.cfg.MasterKey, infoTrae, raw, &sess); err != nil {
+	if !a.storeOf("trae").GetSession(trace, &sess) {
 		return nil
 	}
 	return &sess
 }
 
-func (a *App) latestTraeTrace() string {
-	v, _ := a.traeKV().Get(traeLatestKey)
-	return v
-}
+func (a *App) latestTraeTrace() string { return a.storeOf("trae").Latest() }
 
 type callbackParams struct {
 	AuthCode     string
@@ -1138,15 +1066,7 @@ func (a *App) saveScannedTraeAccount(label, refreshToken string, sess *traeLogin
 	if acct.Label == "" {
 		acct.Label = "Trae-" + suffix
 	}
-	if err := a.traePut(acct); err != nil {
-		return nil, err
-	}
-	list, err := a.traeListMeta()
-	if err != nil {
-		return nil, err
-	}
-	list = append(list, accountMeta{ID: acct.ID, Label: acct.Label, CreatedAt: acct.CreatedAt})
-	if err := a.traeSaveIndex(list); err != nil {
+	if err := a.traeAppend(acct); err != nil {
 		return nil, err
 	}
 	return acct, nil
@@ -1201,4 +1121,196 @@ func (a *App) completeTraeLogin(ctx context.Context, sess *traeLoginSession, p c
 	sess.Error = ""
 	_ = a.putTraeLoginSession(sess)
 	return loginOutcome{Label: acct.Label, ID: acct.ID, Via: via}, nil
+}
+
+/* ================================================================== */
+/* Trae 适配器：把上面的协议函数接到通用平台层                           */
+/*                                                                    */
+/* 通用层只认 Platform 接口，Trae 的扫码回调、设备证明、三套钥匙这些细节   */
+/* 全部留在上面，接口变了也只改这一个文件。                              */
+/* ================================================================== */
+
+type traePlatform struct{}
+
+func (p *traePlatform) Key() string     { return "trae" }
+func (p *traePlatform) Label() string   { return "Trae" }
+func (p *traePlatform) Flow() LoginFlow { return FlowCallback }
+
+func (p *traePlatform) Caps() Caps {
+	return Caps{Cooldown: true, Device: true, Local: true, Credits: true}
+}
+
+func (p *traePlatform) Metrics() []Metric {
+	return []Metric{{K: "credits", Label: "Credits"}}
+}
+
+func (p *traePlatform) Describe(acct *Account, v viewCtx) (string, string, string) {
+	switch {
+	case v.SignedToday:
+		if acct.LastState == "checked" {
+			return "已签", "ok", acct.LastMsg
+		}
+		return "已签", "ok", ""
+	case acct.CooldownUntil > v.Now:
+		return fmt.Sprintf("限流 %d 分钟", (acct.CooldownUntil-v.Now+59999)/60000), "warn", ""
+	case acct.LastState == "token_dead":
+		return "令牌失效", "bad", acct.LastMsg
+	case acct.LastState == "pending" && v.RanToday:
+		return "待确认", "warn", acct.LastMsg
+	case acct.LastState == "error" && v.RanToday:
+		return "签到失败", "bad", acct.LastMsg
+	case acct.PrivateKeyPEM == "" || acct.PublicKeyPEM == "":
+		return "缺设备密钥", "warn", ""
+	}
+	return "今日未签", "idle", ""
+}
+
+func (p *traePlatform) StartLogin(ctx context.Context, a *App) (LoginHandle, error) {
+	privPEM, pubPEM, err := genDeviceIdentity()
+	if err != nil {
+		return LoginHandle{}, fmt.Errorf("生成设备密钥失败: %w", err)
+	}
+	deviceID := genDeviceID()
+	machineID := randomHex(16)
+	verifier, challenge := pkcePair()
+	trace := randomHex(8)
+
+	authURL := buildAuthorizeURL("trae", clientIDIDE, trace, a.cfg.TraeCallback, deviceID, machineID, challenge)
+
+	sess := &traeLoginSession{
+		Trace:         trace,
+		Line:          "trae",
+		Verifier:      verifier,
+		Callback:      a.cfg.TraeCallback,
+		DeviceID:      deviceID,
+		MachineID:     machineID,
+		PrivateKeyPEM: privPEM,
+		PublicKeyPEM:  pubPEM,
+		ClientID:      clientIDIDE,
+		Platform:      "IDE_PC",
+		Status:        "pending",
+		CreatedAt:     time.Now().UnixMilli(),
+	}
+	if err := a.putTraeLoginSession(sess); err != nil {
+		return LoginHandle{}, err
+	}
+	return LoginHandle{ID: trace, AuthURL: authURL, Callback: a.cfg.TraeCallback}, nil
+}
+
+func (p *traePlatform) PollLogin(ctx context.Context, a *App, id string) (LoginPoll, error) {
+	sess := a.getTraeLoginSession(id)
+	if sess == nil {
+		return LoginPoll{Status: "expired"}, nil
+	}
+	return LoginPoll{
+		Status: orDefault(sess.Status, "pending"),
+		ID:     sess.AccountID,
+		Label:  sess.Label,
+		Error:  sess.Error,
+		Via:    sess.Via,
+	}, nil
+}
+
+func (p *traePlatform) CompleteLogin(ctx context.Context, a *App, id string, in LoginInput) (*LoginOutcome, error) {
+	params, err := parseLoginURL(firstNonEmpty(in.URL, in.Text))
+	if err != nil {
+		return nil, err
+	}
+	trace := params.Trace
+	if trace == "" {
+		trace = a.latestTraeTrace()
+	}
+	if trace == "" {
+		return nil, errors.New("没有待完成的登录会话，请先点「添加账号」")
+	}
+	sess := a.getTraeLoginSession(trace)
+	if sess == nil {
+		return nil, errors.New("登录会话已过期，请重新发起")
+	}
+	out, err := a.completeTraeLogin(ctx, sess, params)
+	if err != nil {
+		sess.Status = "error"
+		sess.Error = err.Error()
+		_ = a.putTraeLoginSession(sess)
+		return nil, err
+	}
+	return &LoginOutcome{ID: out.ID, Label: out.Label, Via: out.Via, Repeat: out.Repeat}, nil
+}
+
+func (p *traePlatform) Signin(ctx context.Context, a *App, acct *Account, force bool) signinResult {
+	return a.traeSigninOne(ctx, acct, force)
+}
+
+// HandleCallback 官方授权页把 code 回送到本服务，这一步不需要登录密码。
+func (p *traePlatform) HandleCallback(ctx context.Context, a *App, w http.ResponseWriter, r *http.Request) {
+	params := parseCallbackParams(r.URL)
+
+	trace := params.Trace
+	if trace == "" {
+		trace = a.latestTraeTrace()
+	}
+	if trace == "" {
+		writeHTML(w, http.StatusBadRequest, oauthPage("登录会话丢失", "找不到对应的登录会话，请回到控制台重新发起", false))
+		return
+	}
+	sess := a.getTraeLoginSession(trace)
+	if sess == nil {
+		writeHTML(w, http.StatusBadRequest, oauthPage("登录会话已过期", "二维码有效期 15 分钟，请回到控制台重新获取", false))
+		return
+	}
+
+	out, err := a.completeTraeLogin(ctx, sess, params)
+	if err != nil {
+		sess.Status = "error"
+		sess.Error = err.Error()
+		_ = a.putTraeLoginSession(sess)
+		writeHTML(w, http.StatusBadRequest, oauthPage("换取令牌失败", err.Error(), false))
+		return
+	}
+	title := "登录成功"
+	if out.Repeat {
+		title = "这个二维码已经用过了"
+	}
+	writeHTML(w, http.StatusOK, oauthPage(title, "已保存为「"+out.Label+"」", true, out.Label))
+}
+
+// Keepalive 令牌快到期时只刷新，不签到。
+func (p *traePlatform) Keepalive(ctx context.Context, a *App, acct *Account) error {
+	now := time.Now().UnixMilli()
+	if acct.AccessToken != "" {
+		exp := jwtExp(acct.AccessToken)
+		if exp == 0 || exp*1000-now > keepaliveMarginMS {
+			return nil // 离到期还远，不打扰
+		}
+	}
+	pair, err := a.refreshTraeTokens(ctx, acct)
+	if err != nil {
+		return err
+	}
+	acct.RefreshToken = pair.RefreshToken
+	acct.AccessToken = pair.AccessToken
+	acct.AccessExp = jwtExp(pair.AccessToken)
+	acct.TokenRefreshedAt = now
+	return a.traePut(acct)
+}
+
+// parseLoginURL 用户可能粘整条地址，也可能只粘 ? 后面那段。
+func parseLoginURL(text string) (callbackParams, error) {
+	u, err := url.Parse(text)
+	if err != nil || u.Scheme == "" {
+		tail := text
+		if !strings.HasPrefix(tail, "?") {
+			tail = strings.TrimLeft(tail, "?/")
+		}
+		if u2, err2 := url.Parse("https://placeholder.local/" + tail); err2 == nil {
+			u = u2
+		} else {
+			return callbackParams{}, errors.New("这不像是回调地址")
+		}
+	}
+	p := parseCallbackParams(u)
+	if p.AuthCode == "" && p.RefreshToken == "" {
+		return callbackParams{}, errors.New("地址里没找到 authCodeInfo / code，请复制完整地址（含 ? 之后的部分）")
+	}
+	return p, nil
 }

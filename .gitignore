@@ -11,3 +11,6 @@ data/
 .DS_Store
 Thumbs.db
 *.log
+
+# 本地构建产物
+*.exe

@@ -27,7 +27,7 @@ func newTestApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatalf("KV 初始化失败: %v", err)
 	}
-	return &App{
+	a := &App{
 		cfg: &Config{
 			MasterKey:    randomBytes(32),
 			Loc:          time.FixedZone("CST", 8*3600),
@@ -35,8 +35,13 @@ func newTestApp(t *testing.T) *App {
 			AdminToken:   "test-token",
 			TraeCallback: "http://127.0.0.1:17388/authorize",
 		},
-		kv: kv,
+		kv:    kv,
+		store: map[string]*platStore{},
 	}
+	a.registerPlatform(&traePlatform{})
+	a.registerPlatform(&wbPlatform{})
+	a.registerPlatform(&qoderPlatform{})
+	return a
 }
 
 // 造一个本地看来「还没过期」的 accessToken，避免触发续期
@@ -362,18 +367,20 @@ func TestAutoCallbackFlow(t *testing.T) {
 		t.Fatalf("发起登录失败: %v", err)
 	}
 	var start struct {
-		Trace   string `json:"trace"`
-		AuthURL string `json:"authUrl"`
+		Handle struct {
+			ID      string `json:"id"`
+			AuthURL string `json:"authUrl"`
+		} `json:"handle"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&start)
 	resp.Body.Close()
-	if start.Trace == "" || !strings.Contains(start.AuthURL, "auth_callback_url=http%3A//127.0.0.1%3A17388/authorize") {
+	if start.Handle.ID == "" || !strings.Contains(start.Handle.AuthURL, "auth_callback_url=http%3A//127.0.0.1%3A17388/authorize") {
 		t.Fatalf("登录会话或授权链接不对: %+v", start)
 	}
 
 	// 2) 扫码完成后浏览器被送到 127.0.0.1:17388/authorize
 	cb := mux.URL + "/authorize?authCodeInfo=" +
-		url.QueryEscape(`{"AuthCode":"AC-REAL"}`) + "&loginTraceID=" + start.Trace
+		url.QueryEscape(`{"AuthCode":"AC-REAL"}`) + "&loginTraceID=" + start.Handle.ID
 	resp2, err := http.Get(cb)
 	if err != nil {
 		t.Fatalf("回调请求失败: %v", err)
@@ -386,7 +393,7 @@ func TestAutoCallbackFlow(t *testing.T) {
 	}
 
 	// 3) 控制台轮询到 ok
-	req3, _ := http.NewRequest("GET", mux.URL+"/trae/api/login/poll?trace="+start.Trace, nil)
+	req3, _ := http.NewRequest("GET", mux.URL+"/trae/api/login/poll?id="+start.Handle.ID, nil)
 	req3.Header.Set("X-Admin-Token", "test-token")
 	resp3, err := http.DefaultClient.Do(req3)
 	if err != nil {
@@ -418,13 +425,13 @@ func TestAutoCallbackFlow(t *testing.T) {
 	var list struct {
 		Count    int `json:"count"`
 		Accounts []struct {
-			Label       string `json:"label"`
-			SignedToday bool   `json:"signedToday"`
-			HasKeys     bool   `json:"hasKeys"`
+			Label string `json:"label"`
+			Tag   string `json:"tag"`
+			Tone  string `json:"tone"`
 		} `json:"accounts"`
 	}
 	_ = json.Unmarshal(raw, &list)
-	if list.Count != 1 || !list.Accounts[0].HasKeys {
+	if list.Count != 1 || list.Accounts[0].Tag == "" || list.Accounts[0].Tone == "" {
 		t.Fatalf("账号没有自动入库: %s", string(raw))
 	}
 
