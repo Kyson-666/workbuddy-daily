@@ -1,6 +1,6 @@
 services:
   checkin:
-    image: ghcr.io/hanyuestar/workbuddy-daily:latest
+    image: ghcr.io/kyson-666/workbuddy-daily:latest
     build: .
     container_name: checkin
     restart: unless-stopped
