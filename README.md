@@ -1,6 +1,6 @@
 # Trae + WorkBuddy + Qoder 每日签到 · 自托管 Docker 版
 
-[![docker](https://github.com/hanyuestar/workbuddy-daily/actions/workflows/docker.yml/badge.svg)](https://github.com/hanyuestar/workbuddy-daily/actions/workflows/docker.yml)
+[![docker](https://github.com/Kyson-666/workbuddy-daily/actions/workflows/docker.yml/badge.svg)](https://github.com/Kyson-666/workbuddy-daily/actions/workflows/docker.yml)
 
 把几个平台的每日签到搬到自己的机器上：一个容器、一个控制台、一条定时任务。
 **登录完账号自动进列表，不用再复制回调链接。**
@@ -36,7 +36,7 @@
 ## 二、快速开始
 
 ```bash
-git clone https://github.com/hanyuestar/workbuddy-daily.git
+git clone https://github.com/Kyson-666/workbuddy-daily.git
 cd workbuddy-daily
 cp .env.example .env        # 可全部留空
 docker compose up -d        # 直接拉已发布镜像；想自己构建加 --build
@@ -45,7 +45,7 @@ docker compose up -d        # 直接拉已发布镜像；想自己构建加 --bu
 已发布镜像（公开，amd64 + arm64，每次 push 到 main 自动构建）：
 
 ```
-ghcr.io/hanyuestar/workbuddy-daily:latest
+ghcr.io/kyson-666/workbuddy-daily:latest
 ```
 
 打开 <http://127.0.0.1:17388>，输入登录密码。
@@ -66,7 +66,7 @@ docker run -d --name checkin --restart unless-stopped \
   -p 17388:17388 \
   -v "$PWD/data:/data" \
   -e TZ=Asia/Shanghai \
-  ghcr.io/hanyuestar/workbuddy-daily:latest
+  ghcr.io/kyson-666/workbuddy-daily:latest
 ```
 
 ---

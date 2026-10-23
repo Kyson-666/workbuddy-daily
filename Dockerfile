@@ -24,7 +24,7 @@ FROM scratch
 
 LABEL org.opencontainers.image.title="workbuddy-daily" \
       org.opencontainers.image.description="Trae + WorkBuddy 每日签到（自托管版，扫码自动入库）" \
-      org.opencontainers.image.source="https://github.com/hanyuestar/workbuddy-daily" \
+      org.opencontainers.image.source="https://github.com/Kyson-666/workbuddy-daily" \
       org.opencontainers.image.url="https://github.com/ggzhzc/workbuddy-trae-checkin"
 
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
