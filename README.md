@@ -382,6 +382,21 @@ git fetch upstream && git diff upstream/main -- upstream/worker.js
 
 版本号与 git tag 同名，同一条命令可核对：`docker run --rm ghcr.io/kyson-666/workbuddy-daily:v1.0.1` 的启动日志首行会打印 `版本 v1.0.1`。
 
+### v1.0.2（2026-11-13）
+
+**修复浏览器扩展在真实浏览器中无法启动登录的问题。**
+
+- 修复 `chrome.permissions.request` 报 `This function must be called during a user gesture`：
+  MV3 的动态权限申请必须在用户手势内发起，原实现在 service worker 里调用（跨进程后手势失效）。
+  改为在扩展弹窗的点击处理器里直接申请，service worker 只做 `permissions.contains` 检查。
+- 修复匹配模式带端口导致 `Invalid value`：Chrome 的 match pattern 不支持端口，
+  原实现把 `https://host:60005` 直接拼成 `...:60005/*`。现按 `scheme://hostname/*` 生成，
+  host 权限本身覆盖该主机全部端口，反代端口不再是障碍。
+- 扩展 `manifest.json` 版本升到 1.0.2。
+
+> 升级提醒：镜像内置的扩展包只在扩展目录为空时播种一次。已在用 v1.0.1 的实例，
+> 需先删掉宿主 `/data/extension/dumate-extension.zip` 再重启容器，才会拿到新包。
+
 ### v1.0.1（2026-11-13）
 
 **新增第四个平台 DuMate（百度搭子）。**

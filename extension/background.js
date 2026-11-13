@@ -125,20 +125,37 @@ async function submitToNAS(cookies) {
   return json;
 }
 
-/** 申请 NAS origin 的可选 host 权限（MV3 动态权限，仅用户填写的地址） */
-async function ensureNASPermission(nasOrigin) {
-  const origin = nasOrigin.endsWith('/') ? nasOrigin + '*' : nasOrigin + '/*';
-  const granted = await chrome.permissions.contains({ origins: [origin] });
-  if (granted) return true;
-  return chrome.permissions.request({ origins: [origin] });
+/**
+ * 由 origin 生成 match pattern。
+ * Chrome 匹配模式不支持端口，host 权限本身覆盖该主机全部端口，故只用 scheme + hostname。
+ */
+function patternOf(origin) {
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.protocol + '//' + u.hostname + '/*';
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * 检查 NAS origin 的 host 权限。
+ * 注意：这里**只检查不申请** —— permissions.request 必须在用户手势内调用，
+ * 由 popup 的点击处理器发起；service worker 里调用会报
+ * "This function must be called during a user gesture"。
+ */
+async function hasNASPermission(nasOrigin) {
+  const pattern = patternOf(nasOrigin);
+  if (!pattern) return false;
+  return chrome.permissions.contains({ origins: [pattern] });
 }
 
 /** 主流程 */
 async function runLogin(cfg) {
-  // 先申请 NAS 地址的 host 权限（用户确认一次即可，之后免询问）
-  const granted = await ensureNASPermission(cfg.nasOrigin);
-  if (!granted) throw new Error('未授权访问签到服务地址，无法回传登录信息');
-
+  if (!(await hasNASPermission(cfg.nasOrigin))) {
+    throw new Error('缺少访问 ' + cfg.nasOrigin + ' 的权限，请回到扩展弹窗重新点一次「登录百度账号」并允许访问');
+  }
   current = { ...cfg, status: 'opening', startedAt: Date.now() };
   notifyPopup('opening', '正在打开百度登录页…');
 
@@ -185,13 +202,44 @@ function notifyPopup(status, message) {
 
 /* ---------------- 消息入口 ---------------- */
 
+const KEY_PENDING = 'dumate_pending_login';
+let starting = false; // 同步互斥：覆盖 runLogin 首个 await 之前的窗口
+
+/**
+ * 统一入口。两条触发路径（弹窗回调 / permissions.onAdded）都会走到这里，
+ * 用同步标志位去重，避免权限确认框关闭弹窗后重复启动。
+ */
+function startLogin(cfg) {
+  if (current) return Promise.reject(new Error('已有登录进行中，请先完成或取消'));
+  if (starting) return Promise.resolve({ ok: true, deduped: true });
+  starting = true;
+  chrome.storage.session.remove(KEY_PENDING).catch(() => {});
+  return runLogin(cfg).finally(() => { starting = false; });
+}
+
+/**
+ * 安全网：权限确认框是模态的，会关掉扩展弹窗，弹窗里的回调随之丢失。
+ * 权限授予成功后由这里接手，保证登录流程一定启动。
+ */
+chrome.permissions.onAdded.addListener(async () => {
+  let pending = null;
+  try {
+    const v = await chrome.storage.session.get(KEY_PENDING);
+    pending = v[KEY_PENDING] || null;
+  } catch (e) {
+    return;
+  }
+  if (!pending || !pending.nasOrigin) return;
+  try {
+    await startLogin({ nasOrigin: pending.nasOrigin, adminToken: pending.adminToken });
+  } catch (e) {
+    if (e && e.message) notifyPopup('error', e.message);
+  }
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'start-login') {
-    if (current) {
-      sendResponse({ ok: false, error: '已有登录进行中，请先完成或取消' });
-      return;
-    }
-    runLogin({ nasOrigin: msg.nasOrigin, adminToken: msg.adminToken })
+    startLogin({ nasOrigin: msg.nasOrigin, adminToken: msg.adminToken })
       .then(res => sendResponse(res))
       .catch(e => {
         notifyPopup('error', e.message || String(e));
