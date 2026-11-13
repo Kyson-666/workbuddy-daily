@@ -382,6 +382,22 @@ git fetch upstream && git diff upstream/main -- upstream/worker.js
 
 版本号与 git tag 同名，同一条命令可核对：`docker run --rm ghcr.io/kyson-666/workbuddy-daily:v1.0.1` 的启动日志首行会打印 `版本 v1.0.1`。
 
+### v1.0.3（2026-11-13）
+
+**修复「登录第二个账号时，百度页面刚打开就被关掉」。**
+
+- 根因：原判据 `hasLoginTrace()` 只判断「浏览器里有没有百度登录痕迹」。已登录账号 A 时再添加账号 B，
+  第一轮轮询立刻命中 A 的残留 cookie → 直接进握手并关掉标签页，回传的还是 A。
+- 修复：改为**身份签名基线比对**。启动时先记录 `bce-session` / `BDUSS` / `bce-login-accountid` 等
+  身份类 cookie 的签名，只有签名相对基线**发生变化且连续两次采样一致**（`STABLE_MS=2s`）才算本次登录完成。
+- 超时提示补充了「该账号已在此浏览器登录过」的可操作指引（先退出或换无痕窗口）。
+- 新增 `testdata/extension-identity-signature.test.js` 契约测试（9 项），并接入 CI；
+  若判据被改回「有痕迹即可」，CI 直接失败。
+- 扩展 `manifest.json` 版本 1.0.3。
+
+> 升级提醒：镜像内置的扩展包只在扩展目录为空时播种一次。已在用的实例，
+> 需先删掉宿主 `/data/extension/dumate-extension.zip` 再重启容器，才会拿到新包。
+
 ### v1.0.2（2026-11-13）
 
 **修复浏览器扩展在真实浏览器中无法启动登录的问题。**

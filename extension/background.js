@@ -11,6 +11,12 @@
  *
  * 成功判据对齐 dumate-proxy：以「cookie 能否换到 app token」为准（由 NAS 端验证），
  * 扩展侧只做「有登录痕迹 → 抓取 → 回传」。
+ *
+ * v1.0.3 修复「登录第二个账号时页面刚打开就被关掉」（2026-11-13 线上问题）：
+ *   原判据只看「有没有登录痕迹」，而上一账号的 cookie 仍在浏览器里未清，
+ *   于是第一轮轮询立刻命中 → 直接跳握手并关掉标签页，回传的还是旧账号。
+ *   现改为**身份签名基线比对**：启动时先记录身份类 cookie 的签名，
+ *   只有签名发生变化（新账号必然改写 bce-session/BDUSS/accountid）才算登录完成。
  */
 
 const LOGIN_URL = 'https://login.bce.baidu.com/?from=dumate_ext&redirect=https%3A%2F%2Fconsole.bce.baidu.com%2Fdumate%2F';
@@ -18,6 +24,8 @@ const CONSOLE_URL = 'https://console.bce.baidu.com/dumate/';
 const POLL_MS = 1500;
 const HANDSHAKE_MS = 40 * 1000;   // console 页 CAS 握手最长等待
 const TOTAL_TIMEOUT_MS = 5 * 60 * 1000;
+/** 签名需要连续两次采样一致才认（避免读到写一半的过渡态） */
+const STABLE_MS = 2000;
 
 /** 有登录痕迹的 cookie 名（对齐 dumate-proxy 的 hasLoginTrace） */
 const TRACE_NAMES = new Set([
@@ -25,7 +33,14 @@ const TRACE_NAMES = new Set([
   'bce-user-info', 'BDUSS', 'bce-login-accountid',
 ]);
 
-let current = null; // { nasOrigin, adminToken, startedAt, tabId, consoleTabId, status }
+/** 身份类 cookie：换账号时这些值必然变化，用于区分「上一账号残留」与「本次真的登录」 */
+const IDENTITY_NAMES = new Set([
+  'bce-session', 'bce-sessionid', 'bce-long-term-sessionid',
+  'bce-user-info', 'BDUSS', 'bce-login-accountid', 'bce-login-display-name',
+  'bce-login-domain-account', 'STOKEN', 'PTOKEN',
+]);
+
+let current = null; // { nasOrigin, adminToken, startedAt, tabId, consoleTabId, status, baseline }
 
 /** 百度系域名 */
 function isBaiduDomain(d) {
@@ -68,6 +83,18 @@ function hasTrace(cookies) {
   return cookies.some(c => TRACE_NAMES.has(c.name));
 }
 
+/**
+ * 身份签名：只取与账号身份相关的 cookie 拼成可比较字符串。
+ * 换账号时这些值必然变化，因此可用来区分「上一账号的残留」与「本次真的登录成功」。
+ */
+function identitySignature(cookies) {
+  return cookies
+    .filter(c => IDENTITY_NAMES.has(c.name))
+    .map(c => c.name + '=' + c.value)
+    .sort()
+    .join('|');
+}
+
 async function openTab(url) {
   const tab = await chrome.tabs.create({ url, active: true });
   return tab.id;
@@ -78,16 +105,26 @@ async function closeTab(id) {
   try { await chrome.tabs.remove(id); } catch {}
 }
 
-/** 等待用户登录：轮询 cookie 直到出现登录痕迹 */
-async function waitLoginTrace() {
+/**
+ * 等待「新账号登录完成」：必须相对基线发生变化，且连续两次采样一致。
+ * @param {string} baseline 启动时的身份签名
+ */
+async function waitLoginTrace(baseline) {
   const deadline = Date.now() + TOTAL_TIMEOUT_MS;
+  let pendingSig = null;
+  let pendingAt = 0;
   while (Date.now() < deadline) {
     if (!current) throw new Error('已取消');
     const cookies = await pickBaiduCookies();
-    if (hasTrace(cookies)) return cookies;
+    const sig = identitySignature(cookies);
+    // 变了 + 连续两次一致（稳定）才算数，避免读到登录过程中的中间态
+    if (sig && sig !== baseline) {
+      if (sig !== pendingSig) { pendingSig = sig; pendingAt = Date.now(); }
+      else if (Date.now() - pendingAt >= STABLE_MS) return cookies;
+    }
     await new Promise(r => setTimeout(r, POLL_MS));
   }
-  throw new Error('登录超时（5 分钟），请重试');
+  throw new Error('登录超时（5 分钟）。若该账号此前已在此浏览器登录过，请先在百度页面退出登录，或改用无痕窗口后再试');
 }
 
 /** 等 console 页完成 CAS 握手：bce-session / bce-sessionid 出现或超时 */
@@ -156,17 +193,19 @@ async function runLogin(cfg) {
   if (!(await hasNASPermission(cfg.nasOrigin))) {
     throw new Error('缺少访问 ' + cfg.nasOrigin + ' 的权限，请回到扩展弹窗重新点一次「登录百度账号」并允许访问');
   }
-  current = { ...cfg, status: 'opening', startedAt: Date.now() };
+  // ★ 关键修复：启动时先记录基线签名，之后只有签名变化才算登录成功
+  const baseline = identitySignature(await pickBaiduCookies());
+  current = { ...cfg, status: 'opening', startedAt: Date.now(), baseline };
   notifyPopup('opening', '正在打开百度登录页…');
 
   current.tabId = await openTab(LOGIN_URL);
   current.status = 'waiting';
-  notifyPopup('waiting', '请在打开的页面中登录百度账号…');
+  notifyPopup('waiting', '请在打开的页面中登录百度账号（若当前浏览器已登录其他号，请先退出或使用无痕窗口）…');
 
-  await waitLoginTrace();
+  await waitLoginTrace(baseline);
 
   current.status = 'handshake';
-  notifyPopup('handshake', '登录成功，正在完成会话握手（约 30~40 秒）…');
+  notifyPopup('handshake', '检测到新登录，正在完成会话握手（约 30~40 秒）…');
   current.consoleTabId = await openTab(CONSOLE_URL);
   await waitHandshake();
 

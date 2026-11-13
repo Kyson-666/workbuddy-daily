@@ -20,6 +20,10 @@ jobs:
       - name: 单元测试（含与上游 JS 的逐字节比对）
         run: go test ./...
 
+      # 扩展「登录第二个账号」判据的回归：若有人把身份签名基线比对改回「有痕迹即可」，这里会失败
+      - name: 扩展登录判据契约测试
+        run: node testdata/extension-identity-signature.test.js
+
       # 防止 tag 与源码版本号漂移：v1.0.1 必须对应 version.go 里的 1.0.1
       - name: 校验 tag 与 version.go 一致
         if: startsWith(github.ref, 'refs/tags/v')
