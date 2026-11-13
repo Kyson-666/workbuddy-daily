@@ -31,6 +31,7 @@ func NewApp(cfg *Config) (*App, error) {
 	a.registerPlatform(&traePlatform{})
 	a.registerPlatform(&wbPlatform{})
 	a.registerPlatform(&qoderPlatform{})
+	a.registerPlatform(&dumatePlatform{})
 	return a, nil
 }
 

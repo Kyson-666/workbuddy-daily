@@ -41,6 +41,7 @@ func newTestApp(t *testing.T) *App {
 	a.registerPlatform(&traePlatform{})
 	a.registerPlatform(&wbPlatform{})
 	a.registerPlatform(&qoderPlatform{})
+	a.registerPlatform(&dumatePlatform{})
 	return a
 }
 

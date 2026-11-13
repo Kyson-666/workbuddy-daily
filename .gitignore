@@ -14,3 +14,14 @@ Thumbs.db
 
 # 本地构建产物
 *.exe
+
+# DuMate 扩展构建中间产物
+/dumate-extension.zip
+
+# CRX 签名私钥与签名包：私钥泄露 = 任何人可用同一扩展 ID 签发"官方"扩展
+# （扩展 ID 由公钥派生，换 pem 会变 ID；pem 只留本地，重新打 crx 时用）
+extension.pem
+extension.crx
+
+# 阶段 0 本机实测脚本（硬编码了本机 dumate-proxy 路径，仅供本机复现）
+testdata/dumate-stage0-test.js

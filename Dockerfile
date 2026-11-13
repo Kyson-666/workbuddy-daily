@@ -30,6 +30,9 @@ LABEL org.opencontainers.image.title="workbuddy-daily" \
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/checkin /checkin
 
+# DuMate 扩展包初始版本：宿主 ./dumate-extension 为空时，启动逻辑从这里播种
+COPY dumate-extension/ /opt/extension-builtin/
+
 # 时区库已编进二进制（time/tzdata），scratch 里也能按 TZ=Asia/Shanghai 计算日期
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     TZ=Asia/Shanghai \

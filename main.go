@@ -62,6 +62,7 @@ func main() {
 
 	logf("──────────────────────────────────────────────")
 	logf("签到控制台已启动")
+	logf("  版本       v%s", appVersion)
 	logf("  访问地址   http://<本机 IP>:%s", cfg.Port)
 	if cbSrv != nil {
 		logf("  回调端口   %s（Trae 授权跳转专用）", cfg.CallbackPort)

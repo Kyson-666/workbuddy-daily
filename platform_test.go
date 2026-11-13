@@ -40,13 +40,14 @@ func TestPlatformRegistry(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
-	if len(got.Platforms) != 3 {
-		t.Fatalf("应注册三个平台，实际 %d", len(got.Platforms))
+	if len(got.Platforms) != 4 {
+		t.Fatalf("应注册四个平台，实际 %d", len(got.Platforms))
 	}
 	want := []struct{ key, label, flow string }{
 		{"trae", "Trae", "callback"},
 		{"wb", "WorkBuddy", "link"},
 		{"qoder", "Qoder", "link"},
+		{"dumate", "DuMate", "ext"},
 	}
 	for i, w := range want {
 		if got.Platforms[i].Key != w.key || got.Platforms[i].Label != w.label || got.Platforms[i].Flow != w.flow {

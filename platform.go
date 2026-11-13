@@ -105,12 +105,14 @@ const keepaliveMarginMS = 6 * 60 * 60 * 1000
 
 type LoginFlow string
 
-// 登录形态决定控制台渲染哪张卡片，目前只有两种：
+// 登录形态决定控制台渲染哪张卡片，目前只有三种：
 //   - callback：官方授权页把 code 回送到本机的 127.0.0.1（Trae），远程访问要粘贴兜底
 //   - link：打开官方页面完成授权，本服务在后台轮询结果（WorkBuddy / Qoder）
+//   - ext：浏览器扩展抓取登录态后回传（DuMate），控制台引导安装扩展
 const (
 	FlowCallback LoginFlow = "callback"
 	FlowLink     LoginFlow = "link"
+	FlowExt      LoginFlow = "ext"
 )
 
 type Metric struct {
@@ -632,19 +634,26 @@ func (a *App) handleLoginPoll(w http.ResponseWriter, r *http.Request, p Platform
 	writeJSON(w, http.StatusOK, res)
 }
 
-// handleLoginClaim 远程访问时，用户把授权后的地址粘回来。
+// handleLoginClaim 登录凭据回传落点：Trae 远程粘贴回调地址、DuMate 扩展回传 cookie。
 func (a *App) handleLoginClaim(w http.ResponseWriter, r *http.Request, p Platform) {
-	if p.Flow() != FlowCallback {
+	if p.Flow() != FlowCallback && p.Flow() != FlowExt {
 		writeErr(w, http.StatusBadRequest, p.Label()+"不需要粘贴地址，请在打开的页面里完成授权")
 		return
 	}
 	body := readJSONBody(r)
-	text := strings.TrimSpace(firstNonEmpty(asString(body["url"]), asString(body["text"])))
+	// 扩展回传：{cookies:[...]}；粘贴兜底：{url|text: "..."}
+	cookiesJSON := ""
+	if c := body["cookies"]; c != nil {
+		if b, err := json.Marshal(c); err == nil {
+			cookiesJSON = string(b)
+		}
+	}
+	text := strings.TrimSpace(firstNonEmpty(cookiesJSON, asString(body["url"]), asString(body["text"])))
 	if text == "" {
-		writeErr(w, http.StatusBadRequest, "请粘贴回调地址")
+		writeErr(w, http.StatusBadRequest, "请粘贴回调地址或通过扩展登录")
 		return
 	}
-	out, err := p.CompleteLogin(r.Context(), a, "", LoginInput{URL: text})
+	out, err := p.CompleteLogin(r.Context(), a, "", LoginInput{URL: text, Text: text})
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

@@ -1,11 +1,12 @@
-# Trae + WorkBuddy + Qoder 每日签到 · 自托管 Docker 版
+# Trae + WorkBuddy + Qoder + DuMate 每日签到 · 自托管 Docker 版
 
 [![docker](https://github.com/Kyson-666/workbuddy-daily/actions/workflows/docker.yml/badge.svg)](https://github.com/Kyson-666/workbuddy-daily/actions/workflows/docker.yml)
 
 把几个平台的每日签到搬到自己的机器上：一个容器、一个控制台、一条定时任务。
 **登录完账号自动进列表，不用再复制回调链接。**
 
-目前内置三个平台：**Trae**（抖音扫码）、**WorkBuddy**（微信扫码）、**Qoder**（官方页面登录）。
+目前内置四个平台：**Trae**（抖音扫码）、**WorkBuddy**（微信扫码）、**Qoder**（官方页面登录）、
+**DuMate**（百度搭子，浏览器扩展登录）。
 控制台菜单、定时任务、账号存储全部由平台注册表驱动 —— 想再加一个平台，
 只需要写一个文件、注册一行，见[第七节：扩展一个新平台](#七扩展一个新平台)。
 
@@ -110,6 +111,25 @@ docker run -d --name checkin --restart unless-stopped \
 活动当天还没下发时状态是「活动未下发」，等下轮自动重试，不会误标成已签。
 
 > 备注名优先取账号昵称，取不到时是 `Trae-xxxx` / `账号-xxxx` / `Qoder-xxxx`，点名字或铅笔可以就地改。
+
+### DuMate（百度搭子，浏览器扩展登录，自动）
+
+点 **「添加账号」** → 首次使用先在展开的「安装浏览器扩展」卡里 **下载扩展包**（`.zip`），按指引装入
+浏览器（`chrome://extensions` / `edge://extensions` 开「开发者模式」→「加载已解压的扩展程序」）。
+装好后点扩展栏的 **「DuMate 登录助手」** 图标，填本页地址与登录密码 → 点「登录百度账号」→
+在扩展打开的页面里完成百度登录 → 登录态自动回传，账号出现在左侧列表。
+
+- **用户只登录**：cookie 抓取、CAS 会话握手、回传全部由扩展与服务自动完成，不需要手动导出 cookie。
+- **换机器**：任何机器打开本控制台，同一「下载扩展」入口即可重新获取扩展安装。
+- **扩展包托管**：服务自身托管在 `/dumate/extension/`，docker compose 已挂载
+  `./dumate-extension:/data/extension`——更新扩展替换宿主目录文件即可，无需重建镜像。
+- **签到**：每日 +500 积分；已签时状态显示「已签」，重复登录同一百度账号只更新不重复建号。
+- **保活**：DuMate 的登录 cookie 不轮换，Keepalive 只刷新 app token，**不会**导致官方客户端掉线。
+
+> 兜底：装不了扩展的机器可在「直接粘贴 cookie JSON」里粘 `[{name,value},…]` 绑定账号。
+> ⚠️ DuMate 属客户端逆向使用（无官方 API 授权），仅限个人自用，请勿对外分发或商用。
+
+> 备注名优先取百度账号昵称，取不到时是 `DuMate-xxxx`。
 
 ---
 
@@ -258,6 +278,16 @@ a.registerPlatform(&zcodePlatform{})   // ← 加在这里，顺序就是菜单�
 
 ## 八、镜像与构建
 
+已发布镜像（每个版本只推 `vX.Y.Z` + `latest` 两个 tag）：
+
+```bash
+# GitHub Container Registry（推荐）
+docker pull ghcr.io/kyson-666/workbuddy-daily:latest
+
+# 固定版本
+docker pull ghcr.io/kyson-666/workbuddy-daily:v1.0.1
+```
+
 ```bash
 # 本机架构
 docker build -t workbuddy-daily:latest .
@@ -345,6 +375,31 @@ git fetch upstream && git diff upstream/main -- upstream/worker.js
 ```
 
 按 diff 同步到对应的 Go 函数即可；`go test ./...` 里的基准值（`testdata/gen_fixture.js`）也可一并重生成。
+
+---
+
+## 版本历史
+
+版本号与 git tag 同名，同一条命令可核对：`docker run --rm ghcr.io/kyson-666/workbuddy-daily:v1.0.1` 的启动日志首行会打印 `版本 v1.0.1`。
+
+### v1.0.1（2026-11-13）
+
+**新增第四个平台 DuMate（百度搭子）。**
+
+- 签到接口实测确认：`POST console.bce.baidu.com/api/dumate/points/loginBonus`（Cookie 认证），
+  状态查 `loginBonusInfo`；每日 +500 积分，`hasIssued==true` 时**不发 POST**，签到后回查复读验证。
+- 登录走**浏览器扩展**：用户只登录，扩展读 httpOnly cookie、后台完成 CAS 会话握手、回传本服务；
+  服务端用 cookie 换 app token 加密入库。扩展包由服务自身托管在 `/dumate/extension/`，
+  任何机器打开控制台都能下载安装。
+- 多账号天然支持：每账号独立 cookie，重复登录同一账号只更新不重复建号。
+- 部署新增 `DUMATE_EXTENSION_DIR` 与 `./dumate-extension:/data/extension` 卷，
+  扩展包持久化到宿主目录，换扩展不需重建镜像。
+- 新增 `version.go` 作为版本号单一来源，启动日志打印版本。
+- 发布流程改为**只在版本 tag 上构建镜像**，只推 `vX.Y.Z` + `latest` 两个 tag（不再推 sha tag）。
+
+### v1.0.0（2026-11-13）
+
+首个带版本号的基线：平台注册表驱动架构，内置 Trae / WorkBuddy / Qoder 三个平台。
 
 ---
 

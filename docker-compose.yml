@@ -16,5 +16,9 @@ services:
       # 北京时间，逗号分隔；留空即关闭自动签到
       CRON_SCHEDULE: ${CRON_SCHEDULE:-08:10,00:20}
       CRON_SECRET: ${CRON_SECRET:-}
+      # DuMate 扩展包托管目录（容器内），留空用默认 /data/extension
+      DUMATE_EXTENSION_DIR: ${DUMATE_EXTENSION_DIR:-}
     volumes:
       - ./data:/data
+      # DuMate 扩展包持久化目录：宿主维护文件，容器读取；更新扩展替换文件即可，无需重建镜像
+      - ./dumate-extension:/data/extension

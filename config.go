@@ -26,6 +26,8 @@ type Config struct {
 	KeepaliveDays int    // 连续这么久没签到成功的账号，定时只刷新令牌（0 = 关闭保活）
 	KeepaliveSlot string // 保活时间点，非空时一并进 Schedules
 	LogRequests   bool   // LOG_REQUESTS=1 时打印每个请求，用于排查反代
+
+	ExtDir string // DuMate 扩展包托管目录（容器内），默认 /data/extension
 }
 
 func loadConfig() (*Config, error) {
@@ -97,6 +99,9 @@ func loadConfig() (*Config, error) {
 	}
 
 	cfg.LogRequests = os.Getenv("LOG_REQUESTS") == "1"
+
+	// DuMate 扩展包托管目录：镜像内置初始版本，宿主 volume 持久化，替换文件即可更新扩展
+	cfg.ExtDir = envOr("DUMATE_EXTENSION_DIR", filepath.Join(cfg.DataDir, "extension"))
 
 	// Trae 只认 http://127.0.0.1:<端口> 作为回调，换域名会直接「网络错误」。
 	cbHost := envOr("TRAE_CALLBACK_HOST", "127.0.0.1")

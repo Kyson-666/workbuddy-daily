@@ -349,9 +349,13 @@ function buildUI(){
 function loginCardHTML(p){
   var k = esc(p.key);
   var cap = p.caps || {};
-  var mode = p.flow === 'callback' ? '自动回调' : '打开页面授权';
+  var mode = p.flow === 'callback' ? '自动回调'
+    : p.flow === 'ext' ? '浏览器扩展'
+    : '打开页面授权';
   var hint = p.flow === 'callback'
     ? '点「添加账号」打开官方登录页，扫码确认后本服务会自己接住回调，账号自动出现在左侧列表，不需要复制任何链接。'
+    : p.flow === 'ext'
+    ? '首次使用请先安装浏览器扩展（下方按钮下载，按指引装进浏览器），然后扩展里登录百度，登录态自动回传，账号出现在左侧列表。'
     : '点「添加账号」打开官方页面，在页面里完成登录，本服务会自动保存账号。';
   var extra = '';
   if(cap.local){
@@ -362,6 +366,28 @@ function loginCardHTML(p){
     fallback = '<details id="fallback-' + k + '" style="margin-top:10px">'
       + '<summary style="cursor:pointer;color:var(--dim);font-size:12.5px">自动回调没接住？手动粘贴一次</summary>'
       + '<input id="url-' + k + '" placeholder="粘贴登录后地址栏的整段链接（127.0.0.1/authorize?…）" style="margin-top:8px">'
+      + '<div class="row" style="margin-top:8px"><button data-claim="' + k + '">绑定账号</button></div>'
+      + '<div class="err" id="claimErr-' + k + '"></div></details>';
+  }
+  if(p.flow === 'ext'){
+    var origin = location.origin;
+    fallback = '<details id="extCard-' + k + '" style="margin-top:10px">'
+      + '<summary style="cursor:pointer;color:var(--dim);font-size:12.5px">① 安装浏览器扩展（首次使用）</summary>'
+      + '<div class="row" style="margin-top:8px"><button data-extdl="' + k + '">下载扩展包（.zip）</button>'
+      + '<button data-extlist="' + k + '">查看可用包</button></div>'
+      + '<div id="extFiles-' + k + '" class="hint" style="margin-top:6px"></div>'
+      + '<div class="hint" style="margin-top:8px">安装步骤：<br>'
+      + '1. 下载并解压扩展包<br>'
+      + '2. 打开浏览器扩展管理页（地址栏输入 <code>chrome://extensions</code>，Edge 为 <code>edge://extensions</code>）<br>'
+      + '3. 打开右上角「开发者模式」<br>'
+      + '4. 点「加载已解压的扩展程序」，选择解压出来的文件夹<br>'
+      + '5. 装好后点扩展栏里的「DuMate 登录助手」图标，填本页地址 <code>' + esc(origin) + '</code> 和登录密码，点「登录百度账号」<br>'
+      + '6. 登录完成后账号自动出现在左侧列表</div>'
+      + '<div class="hint">装好扩展后，点上面的「添加账号」创建登录会话，再去扩展里点登录。'
+      + '装不了扩展的机器也可以直接粘贴 cookie JSON 绑定。</div></details>'
+      + '<details id="fallback-' + k + '" style="margin-top:8px">'
+      + '<summary style="cursor:pointer;color:var(--dim);font-size:12.5px">兜底：直接粘贴 cookie JSON</summary>'
+      + '<input id="url-' + k + '" placeholder=\'粘贴 cookie JSON，如 [{"name":"bce-session","value":"…"},…]\' style="margin-top:8px">'
       + '<div class="row" style="margin-top:8px"><button data-claim="' + k + '">绑定账号</button></div>'
       + '<div class="err" id="claimErr-' + k + '"></div></details>';
   }
@@ -557,6 +583,45 @@ function startLogin(k){
   var btn = document.querySelector('[data-add="' + k + '"]');
   var old = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = '准备中…'; }
+
+  /* FlowExt：扩展负责登录，不开窗口；创建会话后轮询等扩展回传 */
+  if(p.flow === 'ext'){
+    setStatus(k, '正在创建登录会话…');
+    var card = el('extCard-' + k);
+    return api('/' + k + '/api/login/start', { method:'POST', body:'{}' })
+      .then(function(d){
+        if(btn){ btn.disabled = false; btn.textContent = old; }
+        var h = d.handle || {};
+        if(card) card.open = true;
+        setStatus(k, '登录会话已创建。请确认已安装扩展，然后点扩展栏的「DuMate 登录助手」图标，'
+          + '填地址 ' + esc(location.origin) + ' 和登录密码，点「登录百度账号」。'
+          + '扩展登录完成后账号会自动出现在左侧列表。');
+        var n = 0;
+        timers[k] = setInterval(function(){
+          if(++n > 900){
+            stopPoll(k);
+            setStatus(k, '登录会话已超时，请重新点「添加账号」。');
+            return;
+          }
+          api('/' + k + '/api/login/poll?id=' + encodeURIComponent(h.id)).then(function(r){
+            if(r.status === 'ok'){ finishLogin(k, r.label); }
+            else if(r.status === 'expired'){
+              stopPoll(k);
+              setStatus(k, '登录会话已过期，请重新点「添加账号」。');
+            }else if(r.status === 'error'){
+              stopPoll(k);
+              setStatus(k, '登录失败：' + (r.error || '未知错误'));
+            }
+          }).catch(function(e){ stopPoll(k); setStatus(k, String(e.message || e)); });
+        }, 2000);
+      })
+      .catch(function(e){
+        stopPoll(k);
+        setStatus(k, String(e.message || e));
+        if(btn){ btn.disabled = false; btn.textContent = old; }
+      });
+  }
+
   setStatus(k, '正在准备登录页…');
 
   /* 先同步开一个空窗口：官方登录页禁止被内嵌，只能整页打开；
@@ -621,6 +686,35 @@ function finishLogin(k, label){
   return load(k);
 }
 
+/** DuMate 扩展下载与清单 */
+function extDownload(k){
+  api('/dumate/extension/list').then(function(d){
+    var files = d.files || [];
+    // 分发优先级：.crx 为主、.zip 兜底（当前构建仅出 zip，逻辑向前兼容）
+    var pick = files.filter(function(f){ return /\.crx$/i.test(f.name); })[0]
+          || files.filter(function(f){ return /\.zip$/i.test(f.name); })[0]
+          || files[0];
+    if(!pick){ setStatus(k, '扩展目录还没有扩展包，请重新构建部署。'); return; }
+    var a = document.createElement('a');
+    a.href = pick.url + '?token=' + encodeURIComponent(state.tok);
+    a.download = pick.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setStatus(k, '扩展包开始下载，解压后按下方指引安装。');
+  }).catch(function(e){ setStatus(k, String(e.message || e)); });
+}
+
+function extList(k){
+  var box = el('extFiles-' + k);
+  if(!box) return;
+  api('/dumate/extension/list').then(function(d){
+    var files = d.files || [];
+    if(!files.length){ box.textContent = '扩展目录为空'; return; }
+    box.innerHTML = '可用扩展包：<br>' + files.map(function(f){
+      return '<a href="' + esc(f.url) + '?token=' + encodeURIComponent(state.tok) + '" download>' + esc(f.name) + '</a>（' + f.size + ' 字节）';
+    }).join('<br>');
+  }).catch(function(e){ box.textContent = String(e.message || e); });
+}
+
 /** 兜底：把粘贴进来的授权链接交给后端换取令牌并绑定账号 */
 function doClaim(k){
   var inp = el('url-' + k);
@@ -659,6 +753,12 @@ document.addEventListener('click', function(ev){
 
   var add = t.closest ? t.closest('[data-add]') : null;
   if(add){ startLogin(add.dataset.add); return; }
+
+  var extdl = t.closest ? t.closest('[data-extdl]') : null;
+  if(extdl){ extDownload(extdl.dataset.extdl); return; }
+
+  var extlist = t.closest ? t.closest('[data-extlist]') : null;
+  if(extlist){ extList(extlist.dataset.extlist); return; }
 
   var claim = t.closest ? t.closest('[data-claim]') : null;
   if(claim){ doClaim(claim.dataset.claim); return; }

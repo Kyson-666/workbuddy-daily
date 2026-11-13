@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 300px; font: 13px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #0c141d; background: #fff; }
+  .hd { padding: 14px 16px 10px; border-bottom: 1px solid rgba(15,23,42,.08); display: flex; align-items: center; gap: 8px; }
+  .hd b { font-size: 14px; }
+  .bd { padding: 12px 16px 16px; }
+  .status { padding: 10px 12px; border-radius: 10px; background: #f4f6f9; color: #47586b; margin-bottom: 12px; min-height: 38px; }
+  .status.ok { background: rgba(13,138,97,.08); color: #0d8a61; }
+  .status.bad { background: rgba(191,53,41,.08); color: #bf3529; }
+  button { width: 100%; padding: 9px 0; border: 0; border-radius: 10px; background: #0d8a61; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: #47586b; border: 1px solid rgba(15,23,42,.15); margin-top: 8px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .tip { margin-top: 10px; font-size: 11.5px; color: #8b98a7; line-height: 1.5; }
+  input { width: 100%; padding: 8px 10px; border: 1px solid rgba(15,23,42,.15); border-radius: 8px; font-size: 12.5px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <div class="hd"><b>🧭 DuMate 登录助手</b></div>
+  <div class="bd">
+    <input id="nas" placeholder="签到服务地址，如 http://192.168.1.10:17388">
+    <input id="token" type="password" placeholder="登录密码（ADMIN_TOKEN）">
+    <div id="status" class="status">填入签到服务地址与密码后点登录。</div>
+    <button id="btn">登录百度账号</button>
+    <button id="cancel" class="ghost" style="display:none">取消</button>
+    <div class="tip">登录完成后自动回传，无需手动导出 cookie。账号会出现在签到服务控制台的 DuMate 列表里。</div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

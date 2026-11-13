@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "DuMate 登录助手",
+  "version": "1.0.0",
+  "description": "百度搭子（DuMate）登录助手：登录百度账号后自动把登录态回传到自托管的 workbuddy-daily 签到服务。仅在用户主动点击时工作。",
+  "permissions": ["cookies", "tabs", "storage"],
+  "host_permissions": [
+    "*://*.bce.baidu.com/*",
+    "*://*.baidu.com/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "DuMate 登录助手"
+  },
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
