@@ -687,3 +687,62 @@ func (a *App) dumatePlatformKeepalive(acct *Account) error {
 	}
 	return a.dumateRefreshToken(context.Background(), acct)
 }
+
+/* ------------------------------------------------------------------ */
+/* DuMate 专属：独立会话保活（只读）                                      */
+/* ------------------------------------------------------------------ */
+
+// runDuMateSessionKeepalive 是 DuMate 的「独立会话保活」：固定每 4 小时（每天 6 次）
+// 用 cookie 只读打一次 GET /api/dumate/points/loginBonusInfo，
+// 把 24 小时内的最大间隔压到 4 小时。
+//
+// 设计约束（改动前先读这里）：
+//  1. 只读、幂等、无副作用：绝不发 POST /loginBonus（不签到），不写积分 / cookie /
+//     签到日期，也不碰 LastOkDate —— 它对上游和对本地下游都是纯读；
+//  2. 只遍历 dumate 平台自己的账号存储，绝不给 Trae / WorkBuddy / Qoder 发任何请求
+//     —— 那三个平台的令牌是轮换制，多发一次就可能把它们带进限流；
+//  3. 唯一例外：cookie 已失效（上游 401/403）时按现状标 token_dead，
+//     提示「请重新登录」，只写 LastState / LastMsg / LastRun 三个字段，不触发登出。
+func (a *App) runDuMateSessionKeepalive(ctx context.Context) {
+	logf("🔁 DuMate 会话保活开始（只读 loginBonusInfo）")
+	started := time.Now()
+
+	st := a.storeOf("dumate")
+	list, err := st.ListMeta()
+	if err != nil {
+		logf("   ! dumate 读取账号列表失败: %s", err.Error())
+		return
+	}
+
+	alive, dead, failed, skipped := 0, 0, 0, 0
+	for _, meta := range list {
+		acct, gerr := st.Get(meta.ID)
+		if gerr != nil || acct == nil {
+			continue
+		}
+		cookies := a.dumateCookiesOf(acct)
+		if !cookieHas(cookies, cookieSession) && !cookieHas(cookies, cookieSessionID) {
+			// 登录态不完整：保持只读，一个字节都不写（是否标 token_dead 交给签到流程判断）
+			skipped++
+			continue
+		}
+		if _, kerr := a.dumateGetBonusInfo(ctx, cookies); kerr != nil {
+			if isDumateTokenDead(kerr) {
+				acct.LastState = "token_dead"
+				acct.LastMsg = kerr.Error()
+				acct.LastRun = time.Now().UnixMilli()
+				_ = a.dumatePut(acct)
+				dead++
+				logf("   ! DuMate %s: %s", acct.Label, acct.LastMsg)
+				continue
+			}
+			failed++
+			logf("   ! DuMate %s: %s", acct.Label, kerr.Error())
+			continue
+		}
+		alive++
+	}
+
+	logf("🔁 DuMate 会话保活结束：存活 %d · 失效 %d · 失败 %d · 跳过 %d，用时 %.1fs",
+		alive, dead, failed, skipped, time.Since(started).Seconds())
+}

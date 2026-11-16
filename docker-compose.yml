@@ -18,6 +18,9 @@ services:
       CRON_SECRET: ${CRON_SECRET:-}
       # DuMate 扩展包托管目录（容器内），留空用默认 /data/extension
       DUMATE_EXTENSION_DIR: ${DUMATE_EXTENSION_DIR:-}
+      # DuMate 独立会话保活（只读 loginBonusInfo）：北京时间逗号分隔，默认每天 6 次（每 4 小时）
+      # 只针对 DuMate，不会给 Trae / WorkBuddy / Qoder 发请求；填 off 可关闭
+      DUMATE_KEEPALIVE_SLOTS: ${DUMATE_KEEPALIVE_SLOTS:-00:05,04:05,08:05,12:05,16:05,20:05}
     volumes:
       - ./data:/data
       # DuMate 扩展包持久化目录：宿主维护文件，容器读取；更新扩展替换文件即可，无需重建镜像

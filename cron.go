@@ -10,10 +10,10 @@ import (
 // 相比真正的 cron 解析器，这里只支持「每天某时刻」，够用且不会因为时区/夏令时出错。
 func (a *App) StartScheduler(ctx context.Context) {
 	if len(a.cfg.Schedules) == 0 {
-		logf("定时签到未启用（CRON_SCHEDULE 为空）")
+		logf("定时任务未启用（CRON_SCHEDULE 与 DUMATE_KEEPALIVE_SLOTS 都为空）")
 		return
 	}
-	logf("定时签到已启用：每天 %s（%s）", strings.Join(a.cfg.Schedules, "、"), a.cfg.Loc)
+	logf("定时任务已启用：每天 %s（%s）", strings.Join(a.cfg.Schedules, "、"), a.cfg.Loc)
 
 	go func() {
 		fired := map[string]string{} // 时间点 -> 已执行日期，防同一分钟内重复触发
@@ -53,6 +53,12 @@ func (a *App) StartScheduler(ctx context.Context) {
 	}()
 }
 
+// runScheduled 按配置的时间点分派任务，优先级自高到低：
+//  1. KeepaliveSlot        —— 通用令牌保活（KEEPALIVE_DAYS > 0 时才存在）
+//  2. SigninSlots          —— CRON_SCHEDULE，整轮签到
+//  3. DuMateKeepaliveSlots —— DuMate 专属只读会话保活
+//
+// 时间点配重时以序号小的为准：签到永远优先于保活，绝不会因为配重而漏签。
 func (a *App) runScheduled(slot string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -61,7 +67,20 @@ func (a *App) runScheduled(slot string) {
 		a.runKeepalive(ctx)
 		return
 	}
+	if slotIn(a.cfg.SigninSlots, slot) {
+		a.runSigninSlot(ctx, slot)
+		return
+	}
+	if slotIn(a.cfg.DuMateKeepaliveSlots, slot) {
+		a.runDuMateSessionKeepalive(ctx)
+		return
+	}
+	// Schedules 由这三类时间点并集构造，理论上到不了这里；兜底按签到处理最安全。
+	a.runSigninSlot(ctx, slot)
+}
 
+// runSigninSlot 跑一轮全平台签到。
+func (a *App) runSigninSlot(ctx context.Context, slot string) {
 	logf("⏰ 定时签到开始（%s）", slot)
 	started := time.Now()
 
@@ -77,6 +96,15 @@ func (a *App) runScheduled(slot string) {
 		}
 	}
 	logf("⏰ 定时签到结束，用时 %.1fs", time.Since(started).Seconds())
+}
+
+func slotIn(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // runKeepalive 只刷新令牌，不签到：长期不跑的账号不会因为令牌过期而变成 token_dead。

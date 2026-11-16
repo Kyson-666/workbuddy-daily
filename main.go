@@ -74,11 +74,14 @@ func main() {
 	} else {
 		logf("  登录密码   已从 ADMIN_TOKEN / 数据目录读取")
 	}
-	if len(cfg.Schedules) > 0 {
-		logf("  定时签到   %v", cfg.Schedules)
+	if len(cfg.SigninSlots) > 0 {
+		logf("  定时签到   %v", cfg.SigninSlots)
 	}
 	if cfg.KeepaliveSlot != "" {
-		logf("  保活刷新   每天 %s（连续 %d 天未签到才刷）", cfg.KeepaliveSlot, cfg.KeepaliveDays)
+		logf("  令牌保活   每天 %s（连续 %d 天未签到才刷）", cfg.KeepaliveSlot, cfg.KeepaliveDays)
+	}
+	if len(cfg.DuMateKeepaliveSlots) > 0 {
+		logf("  DuMate 保活 %v（只读 loginBonusInfo，每 4 小时一次）", cfg.DuMateKeepaliveSlots)
 	}
 	if cfg.LogRequests {
 		logf("  访问日志   已开启（LOG_REQUESTS=1）")

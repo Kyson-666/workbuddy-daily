@@ -125,6 +125,7 @@ docker run -d --name checkin --restart unless-stopped \
   `./dumate-extension:/data/extension`——更新扩展替换宿主目录文件即可，无需重建镜像。
 - **签到**：每日 +500 积分；已签时状态显示「已签」，重复登录同一百度账号只更新不重复建号。
 - **保活**：DuMate 的登录 cookie 不轮换，Keepalive 只刷新 app token，**不会**导致官方客户端掉线。
+- **会话保活（默认开启）**：每 4 小时用 cookie **只读**查一次签到状态，把登录态在 24 小时内的最大空隙压到 4 小时；只针对 DuMate，不会给其它平台发请求。详见「四、签到与定时任务」。
 
 > 兜底：装不了扩展的机器可在「直接粘贴 cookie JSON」里粘 `[{name,value},…]` 绑定账号。
 > ⚠️ DuMate 属客户端逆向使用（无官方 API 授权），仅限个人自用，请勿对外分发或商用。
@@ -174,6 +175,23 @@ KEEPALIVE_TIME=12:30  # 每天跑保活的时间
 
 账号列表的「上次续期」一列可以看到令牌最近一次刷新的时间。
 
+### DuMate 会话保活（默认开启）
+
+DuMate 的登录态是「cookie 长期有效、app token 8 小时过期」，cookie 本身不轮换，
+但 24 小时内完全不访问时，上游会话可能被判为不活跃。所以容器默认**每 4 小时**
+（每天 6 次）用 cookie **只读**打一次签到状态接口，把 24 小时内的最大间隔压到 4 小时：
+
+```env
+DUMATE_KEEPALIVE_SLOTS=00:05,04:05,08:05,12:05,16:05,20:05   # 逗号分隔；off = 关闭
+```
+
+- **只读、幂等、无副作用**：只发 `GET /api/dumate/points/loginBonusInfo`，**不发**签到请求
+  （`POST /loginBonus`），也不写积分 / cookie / 签到日期。
+- **只针对 DuMate**：不会给 Trae / WorkBuddy / Qoder 发任何请求 —— 那三个平台是换令牌的
+  轮换制，多发一次就可能把它们带进限流。
+- **唯一的写操作**：cookie 已失效（上游 401/403）时，把该账号标成「登录失效」并提示重新登录。
+- 与上面「保活刷新」是两个互不影响的独立开关：这个默认开，那个默认关。
+
 ---
 
 ## 五、配置项
@@ -189,13 +207,15 @@ KEEPALIVE_TIME=12:30  # 每天跑保活的时间
 | `CRON_SECRET` | 空 | `/cron` 独立口令，空则用 `ADMIN_TOKEN` |
 | `KEEPALIVE_DAYS` | 空（关闭） | 连续这么久没签到成功的账号，每天只刷新令牌不签到 |
 | `KEEPALIVE_TIME` | `12:30` | 每天跑保活的时间，配了 `KEEPALIVE_DAYS` 才生效 |
+| `DUMATE_KEEPALIVE_SLOTS` | `00:05,04:05,08:05,12:05,16:05,20:05` | DuMate 专属只读会话保活时间点（每 4 小时一次）；`off` = 关闭；只影响 DuMate |
 | `LOG_REQUESTS` | 空 | 填 `1` 打印每个请求的方法/路径/状态码，排查反代用 |
 | `TZ` | `Asia/Shanghai` | 影响「今天」的判定与定时时间 |
 
 高级项（一般不用动）：`TRAE_CALLBACK_HOST` / `TRAE_CALLBACK_PORT`，改动后回调地址随之变化，自动回调可能失效。
 
-> `CRON_SCHEDULE=off` 可以显式关掉定时；留空则等同于没配，回落到默认的 `08:10,00:20`。
+> `CRON_SCHEDULE=off` 可以显式关掉定时签到；留空则等同于没配，回落到默认的 `08:10,00:20`。
 > 保活刷新是独立开关，配了 `KEEPALIVE_DAYS` 就会把自己的时间点加进定时任务里。
+> DuMate 会话保活默认开启（只读查签到状态），`DUMATE_KEEPALIVE_SLOTS=off` 可关。
 
 ---
 

@@ -25,7 +25,11 @@ type Config struct {
 
 	KeepaliveDays int    // 连续这么久没签到成功的账号，定时只刷新令牌（0 = 关闭保活）
 	KeepaliveSlot string // 保活时间点，非空时一并进 Schedules
-	LogRequests   bool   // LOG_REQUESTS=1 时打印每个请求，用于排查反代
+
+	SigninSlots          []string // CRON_SCHEDULE 解析出的「纯签到」时间点
+	DuMateKeepaliveSlots []string // DuMate 独立会话保活时间点（只读 loginBonusInfo），空 = 关闭
+
+	LogRequests bool // LOG_REQUESTS=1 时打印每个请求，用于排查反代
 
 	ExtDir string // DuMate 扩展包托管目录（容器内），默认 /data/extension
 }
@@ -80,8 +84,9 @@ func loadConfig() (*Config, error) {
 		if _, err := time.Parse("15:04", p); err != nil {
 			return nil, fmt.Errorf("CRON_SCHEDULE 里的 %q 不是 HH:MM 格式", p)
 		}
-		cfg.Schedules = append(cfg.Schedules, p)
+		cfg.SigninSlots = append(cfg.SigninSlots, p)
 	}
+	cfg.Schedules = append(cfg.Schedules, cfg.SigninSlots...)
 
 	// 保活：默认关闭。开启后每天固定时间把「很久没签到」的账号只刷新令牌。
 	if raw := strings.TrimSpace(os.Getenv("KEEPALIVE_DAYS")); raw != "" {
@@ -98,6 +103,28 @@ func loadConfig() (*Config, error) {
 		}
 	}
 
+	// DuMate 独立会话保活：固定每 4 小时（每天 6 次）用 cookie 只读打一次
+	// GET /api/dumate/points/loginBonusInfo，把 24 小时内最大间隔压到 4 小时。
+	// 只读、幂等、无副作用；只针对 DuMate，不给 Trae / WorkBuddy / Qoder 发任何请求。
+	// 默认给推荐值直接生效；显式填 off 可关闭。
+	dkRaw := envOr("DUMATE_KEEPALIVE_SLOTS", "00:05,04:05,08:05,12:05,16:05,20:05")
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DUMATE_KEEPALIVE_SLOTS")), "off") {
+		dkRaw = ""
+	}
+	for _, part := range strings.Split(dkRaw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		if _, err := time.Parse("15:04", p); err != nil {
+			return nil, fmt.Errorf("DUMATE_KEEPALIVE_SLOTS 里的 %q 不是 HH:MM 格式", p)
+		}
+		cfg.DuMateKeepaliveSlots = append(cfg.DuMateKeepaliveSlots, p)
+	}
+
+	// 定时器只认 Schedules：三类时间点并集去重；分派优先级见 runScheduled。
+	cfg.Schedules = dedupeSlots(append(cfg.Schedules, cfg.DuMateKeepaliveSlots...))
+
 	cfg.LogRequests = os.Getenv("LOG_REQUESTS") == "1"
 
 	// DuMate 扩展包托管目录：镜像内置初始版本，宿主 volume 持久化，替换文件即可更新扩展
@@ -109,6 +136,20 @@ func loadConfig() (*Config, error) {
 	cfg.TraeCallback = fmt.Sprintf("http://%s:%s/authorize", cbHost, cbPort)
 
 	return cfg, nil
+}
+
+// dedupeSlots 按首次出现顺序去重，避免启动日志与定时器里出现重复时间点。
+func dedupeSlots(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 func envOr(key, def string) string {
