@@ -402,6 +402,27 @@ git fetch upstream && git diff upstream/main -- upstream/worker.js
 
 版本号与 git tag 同名，同一条命令可核对：`docker run --rm ghcr.io/kyson-666/workbuddy-daily:v1.0.1` 的启动日志首行会打印 `版本 v1.0.1`。
 
+### v1.0.4（2026-11-16）
+
+**新增 DuMate 独立会话保活；扩展登录判据抽为共享实现。**
+
+- **DuMate 会话保活（默认开启）**：固定每 4 小时（每天 6 次）用 cookie **只读**打一次
+  `GET /api/dumate/points/loginBonusInfo`，把 24 小时内的最大间隔压到 4 小时。
+  只读、幂等、无副作用：不发 `POST /loginBonus`（不签到），不写积分 / cookie / 签到日期；
+  唯一的写操作是 cookie 失效（上游 401/403）时把账号标成「登录失效」。
+  **只针对 DuMate**，不会给 Trae / WorkBuddy / Qoder 发任何请求（避免把它们带进限流）。
+  开关 `DUMATE_KEEPALIVE_SLOTS`，默认 `00:05,04:05,08:05,12:05,16:05,20:05`，`off` 可关。
+- 定时任务分派改为三类（令牌保活 > 签到 > DuMate 保活），配置层新增 `SigninSlots` 与并集去重。
+- **扩展登录判据抽到 `identity.js`**：`background.js` 改为 `importScripts` + 纯状态机
+  `createLoginDetector`，MV3 classic worker 与 Node 共用同一份判据；契约测试由 9 项扩到 32 项并接入 CI。
+- 扩展 `manifest.json` 版本 1.0.4。
+
+> 升级提醒：镜像内置的扩展包只在扩展目录为空时播种一次。已在用的实例，
+> 需先删掉宿主 `/data/extension/dumate-extension.zip` 再重启容器，才会拿到新包。
+>
+> 注意：`DUMATE_KEEPALIVE_SLOTS` 默认开启后，`CRON_SCHEDULE=off` 不再等于关闭调度器，
+> 需同时设 `DUMATE_KEEPALIVE_SLOTS=off` 才会全关。
+
 ### v1.0.3（2026-11-13）
 
 **修复「登录第二个账号时，百度页面刚打开就被关掉」。**
