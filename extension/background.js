@@ -17,28 +17,28 @@
  *   于是第一轮轮询立刻命中 → 直接跳握手并关掉标签页，回传的还是旧账号。
  *   现改为**身份签名基线比对**：启动时先记录身份类 cookie 的签名，
  *   只有签名发生变化（新账号必然改写 bce-session/BDUSS/accountid）才算登录完成。
+ *
+ * 判据本体（IDENTITY_NAMES / identitySignature / createLoginDetector）在 identity.js，
+ * 与契约测试共享同一份实现，避免「实现改了、测试里的复刻没改」。
  */
+
+// 必须在顶层同步调用：classic service worker 通过它把判据注入 self.DumateIdentity
+importScripts('identity.js');
+
+const { identitySignature, createLoginDetector } = self.DumateIdentity;
 
 const LOGIN_URL = 'https://login.bce.baidu.com/?from=dumate_ext&redirect=https%3A%2F%2Fconsole.bce.baidu.com%2Fdumate%2F';
 const CONSOLE_URL = 'https://console.bce.baidu.com/dumate/';
 const POLL_MS = 1500;
 const HANDSHAKE_MS = 40 * 1000;   // console 页 CAS 握手最长等待
 const TOTAL_TIMEOUT_MS = 5 * 60 * 1000;
-/** 签名需要连续两次采样一致才认（避免读到写一半的过渡态） */
+/**
+ * 新签名需连续稳定多久才算数（排除读到写一半的过渡态）。
+ * 注意：这是**时间跨度**，不是采样次数。POLL_MS(1500) < STABLE_MS(2000)，
+ * 所以实际需要 3 次相同采样（0 → 1.5s → 3.0s）才会判定，约多花 3 秒；
+ * 相对随后 30~40 秒的 CAS 握手可忽略。
+ */
 const STABLE_MS = 2000;
-
-/** 有登录痕迹的 cookie 名（对齐 dumate-proxy 的 hasLoginTrace） */
-const TRACE_NAMES = new Set([
-  'bce-session', 'bce-sessionid', 'bce-long-term-sessionid',
-  'bce-user-info', 'BDUSS', 'bce-login-accountid',
-]);
-
-/** 身份类 cookie：换账号时这些值必然变化，用于区分「上一账号残留」与「本次真的登录」 */
-const IDENTITY_NAMES = new Set([
-  'bce-session', 'bce-sessionid', 'bce-long-term-sessionid',
-  'bce-user-info', 'BDUSS', 'bce-login-accountid', 'bce-login-display-name',
-  'bce-login-domain-account', 'STOKEN', 'PTOKEN',
-]);
 
 let current = null; // { nasOrigin, adminToken, startedAt, tabId, consoleTabId, status, baseline }
 
@@ -79,22 +79,6 @@ async function pickBaiduCookies() {
   return [...byName.values()];
 }
 
-function hasTrace(cookies) {
-  return cookies.some(c => TRACE_NAMES.has(c.name));
-}
-
-/**
- * 身份签名：只取与账号身份相关的 cookie 拼成可比较字符串。
- * 换账号时这些值必然变化，因此可用来区分「上一账号的残留」与「本次真的登录成功」。
- */
-function identitySignature(cookies) {
-  return cookies
-    .filter(c => IDENTITY_NAMES.has(c.name))
-    .map(c => c.name + '=' + c.value)
-    .sort()
-    .join('|');
-}
-
 async function openTab(url) {
   const tab = await chrome.tabs.create({ url, active: true });
   return tab.id;
@@ -106,22 +90,17 @@ async function closeTab(id) {
 }
 
 /**
- * 等待「新账号登录完成」：必须相对基线发生变化，且连续两次采样一致。
+ * 等待「新账号登录完成」。判据本体在 identity.js 的 createLoginDetector，
+ * 这里只负责轮询采样并把当前时间喂进去。
  * @param {string} baseline 启动时的身份签名
  */
 async function waitLoginTrace(baseline) {
   const deadline = Date.now() + TOTAL_TIMEOUT_MS;
-  let pendingSig = null;
-  let pendingAt = 0;
+  const detector = createLoginDetector(baseline, STABLE_MS);
   while (Date.now() < deadline) {
     if (!current) throw new Error('已取消');
     const cookies = await pickBaiduCookies();
-    const sig = identitySignature(cookies);
-    // 变了 + 连续两次一致（稳定）才算数，避免读到登录过程中的中间态
-    if (sig && sig !== baseline) {
-      if (sig !== pendingSig) { pendingSig = sig; pendingAt = Date.now(); }
-      else if (Date.now() - pendingAt >= STABLE_MS) return cookies;
-    }
+    if (detector.feed(identitySignature(cookies), Date.now())) return cookies;
     await new Promise(r => setTimeout(r, POLL_MS));
   }
   throw new Error('登录超时（5 分钟）。若该账号此前已在此浏览器登录过，请先在百度页面退出登录，或改用无痕窗口后再试');
@@ -220,7 +199,6 @@ async function runLogin(cfg) {
   notifyPopup('ok', '登录成功：' + ((res.label || '账号') + ' 已保存到签到服务'));
   await closeTab(current.tabId);
   await closeTab(current.consoleTabId);
-  const done = current;
   current = null;
   return { ok: true, label: res.label || '', id: res.id || '' };
 }
