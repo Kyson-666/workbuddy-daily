@@ -406,6 +406,23 @@ git fetch upstream && git diff upstream/main -- upstream/worker.js
 
 版本号与 git tag 同名，同一条命令可核对：`docker run --rm ghcr.io/kyson-666/workbuddy-daily:v1.0.1` 的启动日志首行会打印 `版本 v1.0.1`。
 
+### v1.0.5（2026-11-17）
+
+**修复 DuMate 绑定时的误导报错；手动粘贴更宽容。**
+
+- **根因**：无有效 cookie 时，`console.bce.baidu.com/api/dumate/**` 返回 **302** 跳转到
+  `login.bce.baidu.com`；Go 的 http 客户端默认跟随跳转，最终拿到 **200 + 登录页 HTML**。
+  原判定只查 `status != 200 || code != 0` —— 状态是 200、响应里又没有 `code` 字段（被当成 0），
+  两个条件都不成立，于是落到「token 响应缺少 token 字段」，把排查方向完全带偏。
+- **修复**：新增「被重定向到登录页 / 返回非 JSON」的识别，在 **token 换取、签到状态查询、签到提交**
+  三处上游调用统一归一为「登录态失效」——控制台显示「登录态失效」，绑定时提示
+  「登录态已失效，请重新登录（上游把请求重定向到了百度登录页）」。
+- **绑定前本地自检**：缺 `bce-session` / `bce-sessionid` 时直接点名缺哪条，并列出实际解析到的
+  cookie 名，且不再发无意义的上游请求。
+- **粘贴容错**：支持整行 `Cookie:` 前缀、以及 DevTools 的「Copy as cURL」整段（`-H` 与 `-b` 两种形态）。
+- 上游返回 200 但不给 token 时，错误信息会带上游原文，便于定位。
+- 扩展包未变（`manifest` 仍 1.0.4），**本次升级无需删宿主旧 zip**。
+
 ### v1.0.4（2026-11-16）
 
 **新增 DuMate 独立会话保活；扩展登录判据抽为共享实现。**
