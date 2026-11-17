@@ -147,6 +147,75 @@ func TestDumateFetchAppTokenNoTokenShowsUpstreamBody(t *testing.T) {
 	}
 }
 
+// 复刻真实行为（2026-11-17 实测）：未认证时上游 302 跳 login.bce.baidu.com，
+// Go 客户端跟随跳转后拿到 200 + 登录页 HTML。三个上游调用都必须判成 token_dead，
+// 而不是抛「缺少 token 字段」这类误导错误。
+func TestDumateUpstreamLoginRedirectIsTokenDead(t *testing.T) {
+	app := newTestApp(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login-page" {
+			w.Header().Set("Content-Type", "text/html;charset=UTF-8")
+			_, _ = w.Write([]byte("<!DOCTYPE html>\n<html><head><title>百度登录</title></head>" +
+				"<body>login.bce.baidu.com</body></html>"))
+			return
+		}
+		// 未认证 → 302 跳登录页（与真上游一致）
+		http.Redirect(w, r, "/login-page", http.StatusFound)
+	}))
+	defer srv.Close()
+	old := dumateConsole
+	dumateConsole = srv.URL
+	defer func() { dumateConsole = old }()
+
+	cookies := dumateTestCookies()
+
+	_, _, _, err := app.dumateFetchAppToken(context.Background(), cookies)
+	if err == nil || !isDumateTokenDead(err) {
+		t.Fatalf("token 端点被跳登录页时应判 token_dead，实际：%v", err)
+	}
+	if !strings.Contains(err.Error(), "登录页") {
+		t.Fatalf("错误应点明「被重定向到登录页」，实际：%s", err.Error())
+	}
+
+	if _, err := app.dumateGetBonusInfo(context.Background(), cookies); err == nil || !isDumateTokenDead(err) {
+		t.Fatalf("状态端点被跳登录页时应判 token_dead，实际：%v", err)
+	}
+	if _, err := app.dumateClaimBonus(context.Background(), cookies); err == nil || !isDumateTokenDead(err) {
+		t.Fatalf("签到端点被跳登录页时应判 token_dead，实际：%v", err)
+	}
+
+	// 绑定路径最终要给用户看到「登录态已失效」，而不是含糊的字段缺失
+	_, perr := app.dumatePersist(context.Background(), cookies)
+	if perr == nil || !strings.Contains(perr.Error(), "登录态已失效") {
+		t.Fatalf("绑定应报「登录态已失效」，实际：%v", perr)
+	}
+}
+
+// JSON 响应但没给 token（非跳转场景）不能被误判成 token_dead，仍走「没有下发 token」分支
+func TestDumateJsonWithoutTokenIsNotTokenDead(t *testing.T) {
+	app := newTestApp(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, map[string]any{"code": 0, "result": map[string]any{}})
+	}))
+	defer srv.Close()
+	old := dumateConsole
+	dumateConsole = srv.URL
+	defer func() { dumateConsole = old }()
+
+	_, _, _, err := app.dumateFetchAppToken(context.Background(), dumateTestCookies())
+	if err == nil {
+		t.Fatal("应当报错")
+	}
+	if isDumateTokenDead(err) {
+		t.Fatalf("JSON 响应不应被判为 token_dead，实际：%v", err)
+	}
+	if !strings.Contains(err.Error(), "上游没有下发 token") {
+		t.Fatalf("应走「没有下发 token」分支，实际：%s", err.Error())
+	}
+}
+
 // 正向回归：cookie 齐全时绑定照常成功（粘贴路径端到端）
 func TestDumatePersistWorksFromPastedCookieHeader(t *testing.T) {
 	app := newTestApp(t)

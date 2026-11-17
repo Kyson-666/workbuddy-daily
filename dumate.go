@@ -208,6 +208,9 @@ func (a *App) dumateGetBonusInfo(ctx context.Context, cookies []dumateCookie) (*
 	if res.Status == 401 || res.Status == 403 {
 		return nil, errDumateTokenDead
 	}
+	if dumateLooksLikeLoginPage(res) {
+		return nil, dumateLoginRedirectErr()
+	}
 	if res.Status != 200 || asFloat0(jget(res.JSON, "code")) != 0 {
 		return nil, errors.New(dumateErrText(res, "查询签到状态失败"))
 	}
@@ -231,6 +234,26 @@ func (a *App) dumateGetBonusInfo(ctx context.Context, cookies []dumateCookie) (*
 	return info, nil
 }
 
+// dumateLooksLikeLoginPage 判断这次上游响应是不是「无效登录态 → 被重定向到百度登录页」。
+//
+// 实测（2026-11-17）：无有效 cookie 时，console.bce.baidu.com 的 /api/dumate/** 一律
+// 返回 302 → https://login.bce.baidu.com?redirect=…；Go 的 http 客户端默认跟随跳转，
+// 最终拿到 **200 + text/html 登录页**。此时既没有 code 字段（被当成 0），也没有 result，
+// 若按「成功但缺字段」处理，用户只会看到「缺少 token 字段」这种毫无指向的报错。
+func dumateLooksLikeLoginPage(res httpResult) bool {
+	if res.JSON != nil || res.Status != 200 {
+		return false
+	}
+	t := strings.ToLower(res.Text)
+	return strings.Contains(t, "<html") || strings.Contains(t, "login.bce.baidu.com")
+}
+
+// dumateLoginRedirectErr 把「被重定向到登录页」归一到既有的 token_dead 语义：
+// 控制台会显示「登录态失效」、签到会走重新登录提示，而不是抛一个含糊错误。
+func dumateLoginRedirectErr() error {
+	return fmt.Errorf("%w（上游把请求重定向到了百度登录页，返回的不是 JSON）", errDumateTokenDead)
+}
+
 // dumateClaimBonus 提交签到。返回 code 与错误；上游对重复签到给字符串 code，
 // 由调用方复读 loginBonusInfo 兜底判定。
 func (a *App) dumateClaimBonus(ctx context.Context, cookies []dumateCookie) (int, error) {
@@ -240,6 +263,9 @@ func (a *App) dumateClaimBonus(ctx context.Context, cookies []dumateCookie) (int
 	}
 	if res.Status == 401 || res.Status == 403 {
 		return -1, errDumateTokenDead
+	}
+	if dumateLooksLikeLoginPage(res) {
+		return -1, dumateLoginRedirectErr()
 	}
 	if res.Status != 200 {
 		return -1, errors.New(dumateErrText(res, "签到请求失败"))
@@ -265,6 +291,9 @@ func (a *App) dumateFetchAppToken(ctx context.Context, cookies []dumateCookie) (
 	}
 	if res.Status == 401 || res.Status == 403 {
 		return "", 0, "", errDumateTokenDead
+	}
+	if dumateLooksLikeLoginPage(res) {
+		return "", 0, "", dumateLoginRedirectErr()
 	}
 	if res.Status != 200 || asFloat0(jget(res.JSON, "code")) != 0 {
 		return "", 0, "", errors.New(dumateErrText(res, "换取 token 失败"))
