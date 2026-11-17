@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -70,11 +71,43 @@ type dumateBonusInfo struct {
 /* cookie 与请求辅助                                                    */
 /* ------------------------------------------------------------------ */
 
-// parseDumateCookies 宽松解析扩展回传的 cookie JSON（数组或 {cookies:[...]}）。
+// curlCookieHeaderRe / curlCookieFlagRe 用于从 DevTools「Copy as cURL」文本里抠出 Cookie。
+// 两种形态都会出现：`-H 'Cookie: a=1; b=2'` 与 `-b 'a=1; b=2'`。
+var (
+	curlCookieHeaderRe = regexp.MustCompile(`(?i)\bcookie:\s*([^\r\n'"]+)`)
+	curlCookieFlagRe   = regexp.MustCompile(`(?i)(?:^|\s)(?:-b|--cookie)\s*(?:'([^']*)'|"([^"]*)")`)
+)
+
+// cookieHeaderFromCurl 从 cURL 命令里抽取 Cookie 值；不是 cURL 就返回空串。
+func cookieHeaderFromCurl(text string) string {
+	if !strings.Contains(text, "curl") {
+		return ""
+	}
+	if m := curlCookieHeaderRe.FindStringSubmatch(text); m != nil {
+		return strings.TrimSpace(m[1])
+	}
+	if m := curlCookieFlagRe.FindStringSubmatch(text); m != nil {
+		if m[1] != "" {
+			return strings.TrimSpace(m[1])
+		}
+		return strings.TrimSpace(m[2])
+	}
+	return ""
+}
+
+// parseDumateCookies 宽松解析扩展回传 / 手动粘贴的 cookie。
+// 依次尝试：Copy as cURL 文本 → 剥掉 `Cookie:` 表头 → JSON 数组 → {"cookies":[…]} → "k=v; k2=v2"。
 func parseDumateCookies(text string) []dumateCookie {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
+	}
+	// 用户常直接把 cURL 或带表头的一整行贴进来，先归一化
+	if curl := cookieHeaderFromCurl(text); curl != "" {
+		text = curl
+	}
+	if strings.HasPrefix(strings.ToLower(text), "cookie:") {
+		text = strings.TrimSpace(text[len("cookie:"):])
 	}
 	// 直接是数组
 	var arr []dumateCookie
@@ -239,7 +272,14 @@ func (a *App) dumateFetchAppToken(ctx context.Context, cookies []dumateCookie) (
 	result := jget(res.JSON, "result")
 	token = asString(jget(result, "token"))
 	if token == "" {
-		return "", 0, "", errors.New("token 响应缺少 token 字段")
+		// 上游 200 + code=0 却不给 token：基本只有一种解释 —— cookie 不是有效的控制台登录态。
+		// 把上游原文一起抛出来，别让用户对着「缺少 token 字段」猜。
+		return "", 0, "", fmt.Errorf(
+			"上游没有下发 token（HTTP %d，code=%s），说明这组 cookie 不被百度控制台认作登录态。"+
+				"常见原因：① 没在 console.bce.baidu.com 真正登录（缺 bce-session）；"+
+				"② Cookie 来自别的域名（login./passport./hm.baidu.com）；③ 账号类型不符。"+
+				"上游原文：%s",
+			res.Status, asString(jget(res.JSON, "code")), truncate(res.Text, 200))
 	}
 	// expired_at 是 ISO 字符串，解析失败则默认 8h
 	if s := asString(jget(result, "expired_at")); s != "" {
@@ -512,8 +552,32 @@ type dumateLoginSession struct {
 	CreatedAt int64  `json:"createdAt"`
 }
 
+// dumateCheckCookieSet 绑定前的本地自检：先把「缺哪条、实际解析到哪几条」讲清楚，
+// 而不是把上游含糊的「没有 token」直接甩给用户。
+func dumateCheckCookieSet(cookies []dumateCookie) error {
+	names := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if c.Name != "" {
+			names = append(names, c.Name)
+		}
+	}
+	if len(names) == 0 {
+		return errors.New("没有从粘贴内容里解析出任何 cookie：请复制 console.bce.baidu.com 请求头里的整行 Cookie" +
+			"（形如 bce-session=…; bce-sessionid=…），或直接用 DevTools 的「Copy as cURL」整段粘贴")
+	}
+	if !cookieHas(cookies, cookieSession) && !cookieHas(cookies, cookieSessionID) {
+		return fmt.Errorf("粘贴内容里缺 %s / %s —— 这是百度控制台登录态的关键 cookie，缺了必然换不到 token。"+
+			"本次只解析到 %d 条：%s",
+			cookieSession, cookieSessionID, len(names), strings.Join(names, ", "))
+	}
+	return nil
+}
+
 // dumatePersist 用验证过的 cookie 建号入库。重复 accountId 时更新既有账号的 cookie。
 func (a *App) dumatePersist(ctx context.Context, cookies []dumateCookie) (*Account, error) {
+	if err := dumateCheckCookieSet(cookies); err != nil {
+		return nil, err
+	}
 	token, expiredAt, accountID, err := a.dumateFetchAppToken(ctx, cookies)
 	if err != nil {
 		return nil, fmt.Errorf("cookie 验证失败: %w", err)

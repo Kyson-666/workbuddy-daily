@@ -127,7 +127,11 @@ docker run -d --name checkin --restart unless-stopped \
 - **保活**：DuMate 的登录 cookie 不轮换，Keepalive 只刷新 app token，**不会**导致官方客户端掉线。
 - **会话保活（默认开启）**：每 4 小时用 cookie **只读**查一次签到状态，把登录态在 24 小时内的最大空隙压到 4 小时；只针对 DuMate，不会给其它平台发请求。详见「四、签到与定时任务」。
 
-> 兜底：装不了扩展的机器可在「直接粘贴 cookie JSON」里粘 `[{name,value},…]` 绑定账号。
+> 兜底：装不上扩展时，可在 DuMate 卡片的「直接粘贴 cookie JSON」里粘以下**任一**形式绑定账号：
+> ① `[{name,value},…]`；② `{"cookies":[…]}`；③ DevTools 里复制的**整行 `Cookie:`**；
+> ④ DevTools 的**「Copy as cURL」整段**（会自动抽出其中的 Cookie）。
+> 关键是必须含 `bce-session` / `bce-sessionid` —— 它们只来自 `console.bce.baidu.com` 的请求头，
+> 且只有**真正登录过百度控制台**（完成 CAS 握手）才有；缺了会直接告诉你缺哪条、实际解析到哪几条。
 > ⚠️ DuMate 属客户端逆向使用（无官方 API 授权），仅限个人自用，请勿对外分发或商用。
 
 > 备注名优先取百度账号昵称，取不到时是 `DuMate-xxxx`。
